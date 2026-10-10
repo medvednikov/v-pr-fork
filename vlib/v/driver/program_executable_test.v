@@ -178,6 +178,47 @@ fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
 		[]string{}).unknown.len > 0
 }
 
+fn test_program_link_inputs_give_an_option_the_value_that_follows_it_in_the_command() {
+	root := link_inputs_fixture('program_link_values')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	libs := os.join_path(root, 'libs')
+	os.mkdir_all(libs)!
+	archive := os.join_path(libs, 'libanswer.a')
+	os.write_file(archive, '!<arch>\nanswer')!
+	symbols := os.join_path(root, 'symbols.map')
+	os.write_file(symbols, '{ global: answer; };\n')!
+	// The value of an option of the linker can be an argument of the compiler
+	// driver, which hands it over in its place; an option whose value is attached
+	// to it takes none.
+	for args in [
+		['-Wl,-rpath', '/opt/lib', '-Wl,-L,${libs},-lanswer'],
+		['-Wl,-rpath', libs, '-Wl,-L,${libs},-lanswer'],
+		['-Wl,--sort-common', '-Wl,-L${libs}', '-lanswer'],
+		['-Wl,--icf=all', '-Wl,--sort-common=descending', '-L', libs, '-lanswer'],
+		['-Wl,-soname', 'libout.so', '-L${libs}', '-Wl,-lanswer'],
+		['-Wl,-R${libs}', '-Wl,-R', '-Wl,${libs}', '-L${libs}', '-lanswer'],
+	] {
+		mut command := ['-o', 'out', 'src.c']
+		command << args
+		inputs := v3_program_link_inputs(command, '', []string{})
+		assert inputs.unknown == '', args.str()
+		assert inputs.files == [archive], args.str()
+	}
+	split := v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,--version-script', symbols,
+		'-L${libs}', '-lanswer'], '', []string{})
+	assert split.unknown == ''
+	assert split.files == [archive, symbols].sorted()
+	// A macro that the compiler is given a value for names no file, and neither
+	// does a value that is no absolute path.
+	defined := v3_program_link_inputs(['-o', 'out', 'src.c', '-DASSETS=../assets', '-DROOT=${archive}',
+		'-fdebug-prefix-map=../src=.', '-std=gnu11', '--sysroot=${root}', '-fprofile-use=${symbols}'],
+		'', []string{})
+	assert defined.unknown == ''
+	assert defined.files == [symbols]
+}
+
 fn test_program_link_inputs_follow_a_linker_script_of_any_name() {
 	root := link_inputs_fixture('program_link_script_name')
 	defer {

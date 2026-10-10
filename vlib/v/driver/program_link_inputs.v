@@ -37,9 +37,7 @@ mut:
 	libraries      []string
 	framework_dirs []string
 	frameworks     []string
-	// What `-Wl,` and `-Xlinker` hand to the linker, in the order of the command.
-	forwarded []string
-	unknown   string
+	unknown        string
 }
 
 // v3_compiler_options_with_value are the options of a C compiler driver whose next
@@ -61,10 +59,11 @@ const v3_compiled_source_suffixes = ['.c', '.m', '.mm', '.M', '.cc', '.cp', '.cx
 // The options of a linker, by their names without the dashes that start them: GNU
 // ld takes one of its long options with one dash or with two.
 
-// v3_linker_flag_options take no value and name no input.
-const v3_linker_flag_options = ['s', 'S', 'x', 'X', 'E', 'i', 'r', 'g', 'n', 'N', 'q', 't', 'w',
-	'v', 'V', 'M', 'd', 'dc', 'dp', 'O0', 'O1', 'O2', 'O3', '(', ')', 'strip-all', 'strip-debug',
-	'discard-all', 'discard-locals', 'export-dynamic', 'no-export-dynamic', 'gc-sections',
+// v3_linker_flag_options take no value, or one that is attached to them with `=`,
+// and name no input.
+const v3_linker_flag_options = ['sort-common', 'icf', 's', 'S', 'x', 'X', 'E', 'i', 'r', 'g', 'n',
+	'N', 'q', 't', 'w', 'v', 'V', 'M', 'd', 'dc', 'dp', 'O0', 'O1', 'O2', 'O3', '(', ')', 'strip-all',
+	'strip-debug', 'discard-all', 'discard-locals', 'export-dynamic', 'no-export-dynamic', 'gc-sections',
 	'no-gc-sections', 'as-needed', 'no-as-needed', 'whole-archive', 'no-whole-archive', 'start-group',
 	'end-group', 'push-state', 'pop-state', 'Bstatic', 'Bdynamic', 'Bsymbolic', 'Bsymbolic-functions',
 	'Bshareable', 'static', 'dn', 'dy', 'non_shared', 'call_shared', 'shared', 'pie', 'pic-executable',
@@ -113,7 +112,6 @@ const v3_linker_value_options = {
 	'defsym':                      1
 	'hash-style':                  1
 	'sort-section':                1
-	'sort-common':                 1
 	'compress-debug-sections':     1
 	'dynamic-linker':              1
 	'I':                           1
@@ -150,7 +148,6 @@ const v3_linker_value_options = {
 	'audit':                       1
 	'depaudit':                    1
 	'dependency-file':             1
-	'icf':                         1
 	'pack-dyn-relocs':             1
 	'export-dynamic-symbol':       1
 	'orphan-handling':             1
@@ -221,11 +218,44 @@ const v3_linker_framework_options = ['framework', 'weak_framework', 'needed_fram
 const v3_linker_library_prefixes = ['-weak-l', '-reexport-l', '-needed-l', '-upward-l', '-hidden-l',
 	'-lazy-l', '-merge-l']
 
-// v3_compiler_options_for_the_linker are the options above that a C compiler
-// driver takes for the linker without `-Wl,`.
-const v3_compiler_options_for_the_linker = ['T', 'force_load', 'weak_library', 'reexport_library',
-	'bundle_loader', 'exported_symbols_list', 'unexported_symbols_list', 'order_file', 'framework',
-	'weak_framework', 'sectcreate', 'filelist', 'dylib_file']
+// v3_compiler_options_for_the_linker maps the options that a C compiler driver
+// hands to the linker as they are, with the arguments that follow them, to the
+// number of those arguments.
+const v3_compiler_options_for_the_linker = {
+	'-L':                       1
+	'-l':                       1
+	'-F':                       1
+	'-T':                       1
+	'-framework':               1
+	'-weak_framework':          1
+	'-force_load':              1
+	'-weak_library':            1
+	'-reexport_library':        1
+	'-bundle_loader':           1
+	'-exported_symbols_list':   1
+	'-unexported_symbols_list': 1
+	'-order_file':              1
+	'-filelist':                1
+	'-dylib_file':              1
+	'-sectcreate':              3
+}
+
+// v3_compiler_option_values returns the number of arguments after the option `arg`
+// of a C compiler driver that belong to it, and are no arguments of their own.
+fn v3_compiler_option_values(arg string) int {
+	if arg in v3_compiler_options_with_value || c_flag_consumes_next_operand(arg) {
+		return 1
+	}
+	return v3_compiler_options_for_the_linker[arg] or { 0 }
+}
+
+// V3LinkerArgument is one argument of the command of the linker, as the command of
+// the compiler driver gives it: `forwarded` says that it was handed over with
+// `-Wl,` or `-Xlinker`, and may be any option that a linker has.
+struct V3LinkerArgument {
+	text      string
+	forwarded bool
+}
 
 // add_file records `path`, which the command reads: `as_input` says that the linker
 // reads it as an object, an archive, a library or a linker script, and not as it
@@ -248,44 +278,23 @@ fn (mut c V3LinkCommand) add_file(path string, as_input bool) {
 	}
 }
 
-// add_operand records an argument of the compiler driver that is no option. The
-// driver compiles a file that it knows as a source by its name, and hands every
-// other file to the linker, whatever its name ends with: an object, an archive, a
-// library, a linker script.
-fn (mut c V3LinkCommand) add_operand(operand string) {
-	if operand.len == 0 {
-		return
-	}
-	if operand[0] == `@` {
-		c.unknown = 'the arguments of `${operand}` are in a file'
-		return
-	}
-	// What is not there and has no name of a library is what the command writes.
-	if os.is_abs_path(operand) && !os.is_file(operand) && !v3_path_is_link_input(operand) {
-		return
-	}
-	c.add_file(operand, os.file_ext(operand) !in v3_compiled_source_suffixes)
-}
-
 // v3_relative_path_leaves_its_directory reports whether a relative path names
 // something outside the directory that it is relative to.
 fn v3_relative_path_leaves_its_directory(path string) bool {
 	return path == '..' || path.starts_with('../') || path.contains('/../') || path.ends_with('/..')
 }
 
-// add_option records the option `name` of a linker, given without the dashes that
-// start it, and returns the number of arguments after it that belong to it.
-// `value` is what the argument itself gives the option after `=`, and `rest` are
-// the arguments that follow. An option that is not known is one whose inputs are
-// not known either: `strict` says whether that leaves the inputs of the command
-// unknown, as it does for what is forwarded to the linker, or whether the option
-// is one of the many of the compiler that the link does not depend on.
-fn (mut c V3LinkCommand) add_option(name string, value string, has_value bool, rest []string, strict bool) int {
+// add_linker_option records the option `name` of a linker, given without the
+// dashes that start it, and returns the number of arguments after it that belong to
+// it, or none when it is no option that is known by that name. `value` is what
+// the argument itself gives the option after `=`, and `rest` are the arguments
+// that follow in the command of the linker.
+fn (mut c V3LinkCommand) add_linker_option(name string, value string, has_value bool, rest []V3LinkerArgument) ?int {
 	taken := if has_value { 0 } else { 1 }
 	operand := if has_value {
 		value
 	} else if rest.len > 0 {
-		rest[0].trim_space()
+		rest[0].text
 	} else {
 		''
 	}
@@ -327,25 +336,57 @@ fn (mut c V3LinkCommand) add_option(name string, value string, has_value bool, r
 		}
 		'sectcreate' {
 			if rest.len > 2 {
-				c.add_file(rest[2].trim_space(), false)
+				c.add_file(rest[2].text, false)
 			}
 			return 3
 		}
+		'filelist', 'dylib_file' {
+			c.unknown = 'the linker option `-${name}` reads files that are named elsewhere'
+			return taken
+		}
 		else {}
 	}
-	if strict || name in ['filelist', 'dylib_file'] {
-		c.unknown = 'the linker option `-${name}` is not one whose inputs are known'
-	}
-	return 0
+	return none
 }
 
-// add_forwarded reads the arguments that the command hands to the linker. They
-// are one command for it: an option that takes a value takes it from the argument
-// that follows, which `-Wl,-L,/dir` and `-Xlinker -L -Xlinker /dir` give apart.
-fn (mut c V3LinkCommand) add_forwarded() {
+// add_attached_linker_option records an option of a linker that has its value
+// attached to it, as `-L/dir` has, and reports whether `arg` is one.
+fn (mut c V3LinkCommand) add_attached_linker_option(arg string) bool {
+	if arg.starts_with('--') || arg.len < 3 {
+		return false
+	}
+	if library_prefix := v3_linker_library_prefix(arg) {
+		c.libraries << arg[library_prefix.len..]
+	} else if arg.starts_with('-L') {
+		c.library_dirs << arg[2..]
+	} else if arg.starts_with('-l') {
+		c.libraries << arg[2..]
+	} else if arg.starts_with('-F') {
+		c.framework_dirs << arg[2..]
+	} else if arg.starts_with('-R') {
+		// A directory for the run-time search path, or a file to take symbols of.
+		c.add_file(arg[2..], false)
+	} else if arg.starts_with('-T') && !arg.contains('=') {
+		c.add_file(arg[2..], true)
+	} else if arg[1] in [`z`, `m`, `O`] || (arg[1] == `G` && arg[2].is_digit()) {
+		// `-znow`, `-melf_x86_64`, `-G0`: a value that names no input.
+	} else {
+		return false
+	}
+	return true
+}
+
+// add_linker_arguments reads the command of the linker. It is one command: an
+// option that takes a value takes it from the argument that follows, whether the
+// compiler driver was given the two together, apart, or the value as an argument
+// of its own (`-Wl,-L,/dir`, `-Xlinker -L -Xlinker /dir`, `-Wl,-rpath /dir`). An
+// option that was handed over to the linker and that is not known is one whose
+// inputs are not known either.
+fn (mut c V3LinkCommand) add_linker_arguments(linker_args []V3LinkerArgument) {
 	mut i := 0
-	for i < c.forwarded.len {
-		arg := c.forwarded[i].trim_space()
+	for i < linker_args.len {
+		argument := linker_args[i]
+		arg := argument.text
 		i++
 		if arg.len == 0 {
 			continue
@@ -355,8 +396,13 @@ fn (mut c V3LinkCommand) add_forwarded() {
 			continue
 		}
 		if arg[0] != `-` || arg == '-' {
-			// The linker reads a file that it is given, whatever its name is.
-			c.add_file(arg, true)
+			// The linker reads a file that it is given, whatever its name is. What
+			// the compiler driver names, is not there, and has no name of a library
+			// is what the command writes.
+			if argument.forwarded || !os.is_abs_path(arg) || os.is_file(arg)
+				|| v3_path_is_link_input(arg) {
+				c.add_file(arg, true)
+			}
 			continue
 		}
 		mut name := arg.trim_left('-')
@@ -367,34 +413,11 @@ fn (mut c V3LinkCommand) add_forwarded() {
 			name = name[..equals]
 			has_value = true
 		}
-		known := name in v3_linker_flag_options || name in v3_linker_value_options
-			|| name in v3_linker_plain_file_options || name in v3_linker_input_file_options
-			|| name in v3_linker_framework_options
-			|| name in ['L', 'l', 'F', 'R', 'library-path', 'library', 'sectcreate']
-		if !known && !arg.starts_with('--') {
-			// An option of one letter with its value attached, or one of the
-			// options of ld64 that name a library with a prefix.
-			mut attached := true
-			if library_prefix := v3_linker_library_prefix(arg) {
-				c.libraries << arg[library_prefix.len..]
-			} else if arg.starts_with('-L') {
-				c.library_dirs << arg[2..]
-			} else if arg.starts_with('-l') {
-				c.libraries << arg[2..]
-			} else if arg.starts_with('-F') {
-				c.framework_dirs << arg[2..]
-			} else if arg.starts_with('-T') && !has_value {
-				c.add_file(arg[2..], true)
-			} else if arg.len > 2 && (arg[1] in [`z`, `m`, `O`] || (arg[1] == `G` && arg[2].is_digit())) {
-				// `-znow`, `-melf_x86_64`, `-G0`: a value that names no input.
-			} else {
-				attached = false
-			}
-			if attached {
-				continue
-			}
+		if taken := c.add_linker_option(name, value, has_value, linker_args[i..]) {
+			i += taken
+		} else if !c.add_attached_linker_option(arg) && argument.forwarded {
+			c.unknown = 'the linker option `${arg}` is not one whose inputs are known'
 		}
-		i += c.add_option(name, value, has_value, c.forwarded[i..], true)
 	}
 }
 
@@ -408,9 +431,14 @@ fn v3_linker_library_prefix(arg string) ?string {
 }
 
 // v3_parse_link_command reads the arguments of a command that compiles and links a
-// program for what the link reads.
+// program for what the link reads. The compiler driver compiles a file that it
+// knows as a source by its name, and hands every other file to the linker,
+// whatever its name ends with, in the place that it has in the command, along
+// with what `-Wl,` and `-Xlinker` hand over and with the options that it takes for
+// the linker itself.
 fn v3_parse_link_command(args []string) V3LinkCommand {
 	mut command := V3LinkCommand{}
+	mut linker_args := []V3LinkerArgument{}
 	mut i := 0
 	for i < args.len {
 		arg := args[i].trim_space()
@@ -420,49 +448,59 @@ fn v3_parse_link_command(args []string) V3LinkCommand {
 		}
 		if arg == '-Xlinker' {
 			if i < args.len {
-				command.forwarded << args[i].trim_space()
+				linker_args << V3LinkerArgument{args[i].trim_space(), true}
 				i++
 			}
 			continue
 		}
 		if arg.starts_with('-Wl,') {
-			command.forwarded << arg[4..].split(',')
+			for part in arg[4..].split(',') {
+				linker_args << V3LinkerArgument{part, true}
+			}
+			continue
+		}
+		if arg[0] == `@` {
+			command.unknown = 'the arguments of `${arg}` are in a file'
 			continue
 		}
 		if arg[0] != `-` || arg == '-' {
-			command.add_operand(arg)
+			if os.file_ext(arg) in v3_compiled_source_suffixes {
+				command.add_file(arg, false)
+			} else {
+				linker_args << V3LinkerArgument{arg, false}
+			}
 			continue
 		}
-		if arg in ['-L', '-l', '-F'] {
-			i += command.add_option(arg[1..], '', false, args[i..], false)
+		if values := v3_compiler_options_for_the_linker[arg] {
+			linker_args << V3LinkerArgument{arg, false}
+			for _ in 0 .. values {
+				if i < args.len {
+					linker_args << V3LinkerArgument{args[i].trim_space(), false}
+					i++
+				}
+			}
 			continue
 		}
-		if arg in v3_compiler_options_with_value {
-			i++
+		values := v3_compiler_option_values(arg)
+		if values > 0 {
+			i += values
 			continue
 		}
-		if !arg.starts_with('--') && arg[1..] in v3_compiler_options_for_the_linker {
-			i += command.add_option(arg[1..], '', false, args[i..], false)
-			continue
-		}
-		if library_prefix := v3_linker_library_prefix(arg) {
-			command.libraries << arg[library_prefix.len..]
-		} else if arg.starts_with('-L') {
-			command.library_dirs << arg[2..].trim_space()
-		} else if arg.starts_with('-l') {
-			command.libraries << arg[2..].trim_space()
-		} else if arg.starts_with('-F') {
-			command.framework_dirs << arg[2..]
-		} else if arg.starts_with('-T') && !arg.contains('=') && arg.len > 2 && !arg[2..].starts_with('text')
-			&& !arg[2..].starts_with('bss') && !arg[2..].starts_with('data') {
-			command.add_file(arg[2..], true)
-		} else if arg.contains('=') {
+		if v3_linker_library_prefix(arg) != none || arg.starts_with('-L') || arg.starts_with('-l')
+			|| arg.starts_with('-F') || (arg.starts_with('-T') && arg.len > 2
+			&& !arg.contains('=') && !arg[2..].starts_with('text') && !arg[2..].starts_with('bss')
+			&& !arg[2..].starts_with('data')) {
+			linker_args << V3LinkerArgument{arg, false}
+		} else if arg.contains('=') && !arg.starts_with('-D') && !arg.starts_with('-U') {
 			// `-fprofile-use=/path`, `--sysroot=/path`: only a file is an input, and
 			// the linker reads none of these as one of its own.
-			command.add_file(arg.all_after('='), false)
+			value := arg.all_after('=')
+			if os.is_abs_path(value) {
+				command.add_file(value, false)
+			}
 		}
 	}
-	command.add_forwarded()
+	command.add_linker_arguments(linker_args)
 	return command
 }
 
@@ -726,11 +764,12 @@ fn v3_default_link_library_dirs(manager &modulecache.Manager, linker string, bas
 	for dir in os.getenv('LIBRARY_PATH').split(os.path_delimiter) {
 		candidates << dir
 	}
-	record := os.join_path_single(manager.dir, 'link_library_dirs_${c_hash_bytes(u64(1469598103934665603), '${os.real_path(linker)}\n${v3_cache_file_identity(linker)}\n${base_args.join('\n')}'.bytes()).hex()}')
+	record := os.join_path_single(manager.dir, 'link_library_dirs_${c_hash_bytes(u64(1469598103934665603), 'v3-link-library-dirs-2\n${os.real_path(linker)}\n${v3_cache_file_identity(linker)}\n${base_args.join('\n')}'.bytes()).hex()}')
 	reported := os.read_file(record) or {
 		mut query := base_args.clone()
 		query << '-print-search-dirs'
-		result := cmdexec.run(linker, query)
+		// GCC names what it prints in the language of the user.
+		result := v3_run_in_c_locale(linker, query, '')
 		answer := if result.exit_code == 0 {
 			v3_parse_library_search_dirs(result.output).join('\n') + '\n'
 		} else {
@@ -797,12 +836,31 @@ fn v3_link_search_args(args []string) []string {
 				search << [arg, args[i].trim_space()]
 				i++
 			}
-		} else if arg.starts_with('--sysroot=') || arg.starts_with('--target=')
-			|| arg.starts_with('-specs=') || (arg.starts_with('-B') && !arg.starts_with('-Bs')
-			&& !arg.starts_with('-Bd')) || arg.starts_with('-m') || arg.starts_with('-stdlib=')
-			|| arg.starts_with('-fuse-ld=') || arg in ['-static', '-static-pie', '-nostdlib'] {
+			continue
+		}
+		values := v3_compiler_option_values(arg)
+		if values > 0 {
+			i += values
+			continue
+		}
+		if arg.starts_with('--sysroot=') || arg.starts_with('--target=') || arg.starts_with('-specs=')
+			|| (arg.starts_with('-B') && !arg.starts_with('-Bs') && !arg.starts_with('-Bd'))
+			|| arg.starts_with('-m') || arg.starts_with('-stdlib=') || arg.starts_with('-fuse-ld=')
+			|| arg in ['-static', '-static-pie', '-nostdlib'] {
 			search << arg
 		}
 	}
 	return search
+}
+
+// v3_run_in_c_locale runs `program` like cmdexec.run_in_merged, with the messages
+// of the program in the language that this compiler reads them in: GCC prints
+// where it searches in the language of the user.
+fn v3_run_in_c_locale(program string, args []string, work_folder string) os.Result {
+	env := os.find_abs_path_of_executable('env') or {
+		return cmdexec.run_in_merged(program, args, work_folder)
+	}
+	mut command := ['LC_ALL=C', 'LANGUAGE=C', program]
+	command << args
+	return cmdexec.run_in_merged(env, command, work_folder)
 }
