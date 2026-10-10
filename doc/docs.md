@@ -9289,6 +9289,9 @@ for now data structures such as Linked Lists or Binary Trees that rely on refere
 fields that can use the value `0`, understanding that it is unsafe, and that it can
 cause a panic.
 
+A null reference has to be written as `unsafe { nil }`: outside `unsafe`, the compiler
+rejects `nil`, `0` and `voidptr(0)` where a reference is expected.
+
 ```v
 struct Node {
 	a &Node

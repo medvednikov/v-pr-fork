@@ -16686,6 +16686,10 @@ fn (mut tc TypeChecker) check_struct_field_defaults(node_id flat.NodeId, node fl
 				continue
 			}
 		}
+		if !node.value.starts_with('C.')
+			&& tc.record_null_constant_reference_error(.assignment_mismatch, default_id, expected) {
+			continue
+		}
 		tc.annotate_expected_expr(default_id, expected)
 		tc.check_node_with_expected_context(default_id, expected)
 		actual := tc.resolve_expr(default_id, expected)
