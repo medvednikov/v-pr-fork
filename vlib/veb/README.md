@@ -386,6 +386,24 @@ pub fn (app &App) get_user_by_id(mut ctx Context) veb.Result {
 }
 ```
 
+### Request body size
+
+veb reads the whole request body into memory before it calls the route. A body can have up
+to `max_request_body_size` bytes, a field of `RunParams` that is 64 MiB by default. veb answers
+a request that has a larger body with `413`, and closes the connection. Raise the limit to
+accept larger uploads:
+
+```v ignore
+veb.run_at[App, Context](mut app,
+	port:                  8080
+	max_request_body_size: 512 * 1024 * 1024
+)!
+```
+
+`max_request_body_size: 0` removes the limit; use it only where every client is trusted.
+A negative value is an error. `max_request_buffer_size` is a different setting, which does
+not limit the body.
+
 ### Host
 
 To restrict an endpoint to a specific host, you can use the `host` attribute

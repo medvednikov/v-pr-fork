@@ -86,6 +86,7 @@ struct SslRequestParams {
 	routes                    &map[string]Route
 	benchmark_page_generation bool
 	max_request_buffer_size   int
+	max_request_body_size     int
 }
 
 fn ssl_enabled(params RunParams) bool {
@@ -123,19 +124,39 @@ fn request_read_error_response(err IError) http.Response {
 	if err is http.HeaderLimitError {
 		return http_431
 	}
+	if err is RequestBodyLimitError {
+		return http_413_close
+	}
 	return http_400
 }
 
-fn read_request_from_buffered_reader(mut reader io.BufferedReader) !http.Request {
+// RequestBodyLimitError is the error for a request whose body has more than
+// `RunParams.max_request_body_size` bytes.
+struct RequestBodyLimitError {
+	Error
+}
+
+// msg returns the description of the error.
+fn (err RequestBodyLimitError) msg() string {
+	return 'the request body is too large'
+}
+
+// read_request_from_buffered_reader reads one request. It returns a `RequestBodyLimitError`
+// for a body of more than `max_request_body_size` bytes (0 means no limit), and does not
+// read the rest of that body.
+fn read_request_from_buffered_reader(mut reader io.BufferedReader, max_request_body_size int) !http.Request {
 	mut req := http.parse_request_head(mut reader)!
 	if transfer_encoding_is_chunked(req.header) {
-		req.data = read_chunked_request_body(mut reader)!
+		req.data = read_chunked_request_body(mut reader, max_request_body_size)!
 		return req
 	}
 	content_length := req.header.get(.content_length) or { '0' }
 	content_length_i := content_length.int()
 	if content_length_i <= 0 {
 		return req
+	}
+	if max_request_body_size > 0 && content_length_i > max_request_body_size {
+		return RequestBodyLimitError{}
 	}
 	mut body := []u8{len: content_length_i}
 	read_exact_bytes(mut reader, mut body)!
@@ -153,7 +174,7 @@ fn transfer_encoding_is_chunked(header http.Header) bool {
 	return false
 }
 
-fn read_chunked_request_body(mut reader io.BufferedReader) !string {
+fn read_chunked_request_body(mut reader io.BufferedReader, max_request_body_size int) !string {
 	mut sb := strings.new_builder(1024)
 	for {
 		mut chunk_size_line := reader.read_line()!
@@ -178,6 +199,9 @@ fn read_chunked_request_body(mut reader io.BufferedReader) !string {
 					return sb.str()
 				}
 			}
+		}
+		if max_request_body_size > 0 && chunk_size > max_request_body_size - sb.len {
+			return RequestBodyLimitError{}
 		}
 		mut chunk := []u8{len: chunk_size}
 		read_exact_bytes(mut reader, mut chunk)!
