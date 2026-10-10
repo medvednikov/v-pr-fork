@@ -102,7 +102,7 @@ fn test_functions_that_nothing_names_leave_the_ast() {
 	assert before['never_called'] == .c_fn_decl
 	mut keep := ['named_by_a_stage']
 	keep << module_lifecycle_function_names
-	pruned := prune_unreferenced_cached_functions(mut a, keep)
+	pruned := prune_unreferenced_cached_functions(mut a, keep, []string{})
 	kinds := function_kinds(a, header)
 	// What the program calls, what a kept body calls, what a stage names, what
 	// the module roots, and every method stay.
@@ -128,13 +128,29 @@ fn test_functions_that_nothing_names_leave_the_ast() {
 	}
 }
 
+fn test_functions_of_a_module_that_a_stage_names_stay_in_that_module() {
+	mut a, root := parse_cached_interface('kept_in_module')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	header := os.join_path(root, 'cachedmod.vh')
+	pruned := prune_unreferenced_cached_functions(mut a, module_lifecycle_function_names,
+		['cachedmod.unused', 'othermod.never_called'])
+	kinds := function_kinds(a, header)
+	assert kinds['unused'] == .fn_decl
+	// A function of that name in another module is another function.
+	assert kinds['never_called'] == .empty
+	assert kinds['named_by_a_stage'] == .empty
+	assert pruned.count == 2
+}
+
 fn test_functions_of_a_file_that_is_not_a_cached_interface_stay() {
 	mut a, root := parse_cached_interface('cached_declarations_sources')
 	defer {
 		os.rmdir_all(root) or {}
 	}
 	a.cached_header_sources.clear()
-	pruned := prune_unreferenced_cached_functions(mut a, []string{})
+	pruned := prune_unreferenced_cached_functions(mut a, []string{}, []string{})
 	assert pruned.count == 0
 	assert function_kinds(a, os.join_path(root, 'cachedmod.vh'))['unused'] == .fn_decl
 }
@@ -382,7 +398,7 @@ fn test_a_program_that_lists_its_functions_keeps_every_declaration() {
 		kind:  .import_decl
 		value: 'v.reflection'
 	}
-	pruned := prune_unreferenced_cached_functions(mut a, []string{})
+	pruned := prune_unreferenced_cached_functions(mut a, []string{}, []string{})
 	assert pruned.count == 0
 	assert function_kinds(a, header) == before
 }

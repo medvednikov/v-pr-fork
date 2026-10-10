@@ -55,8 +55,8 @@ const cached_runtime_function_names = ['__as_cast', '__new_array', '__new_array_
 // vlib that a stage of the compiler spells in a string literal, with the name of
 // their module: `dl.interface_export_find`, which the generator looks for and
 // calls where a program can load a shared library, and leaves out without a word
-// where it is not declared. Every function of the same name is kept, in whatever
-// module it is. `cached_declarations_test.v` works this list out again as well.
+// where it is not declared. `cached_declarations_test.v` works this list out again
+// as well.
 const cached_module_function_names = ['c.gen_expr_lvalue', 'debug.after_call_hook',
 	'debug.before_call_hook', 'dl.interface_export_find', 'driver.compare_print_notices',
 	'embed_file.join_chunks', 'json2.decode', 'json2.encode', 'math.abs', 'math.fmod', 'math.min',
@@ -136,9 +136,10 @@ fn v3_program_lists_its_functions(a &flat.FlatAst) bool {
 // the nodes of their attributes become empty ones, which every stage passes over.
 // A name counts wherever a node spells it, as an identifier, a callee, a field or
 // a qualified name, so a function that only shares its name with something that is
-// used stays in. Call it after every file is parsed and before the checker
-// collects declarations.
-fn prune_unreferenced_cached_functions(mut a flat.FlatAst, keep []string) V3PrunedDeclarations {
+// used stays in. `keep_in_modules` are functions that stay as well, each named with
+// the last part of the name of its module, as `dl.interface_export_find`. Call it
+// after every file is parsed and before the checker collects declarations.
+fn prune_unreferenced_cached_functions(mut a flat.FlatAst, keep []string, keep_in_modules []string) V3PrunedDeclarations {
 	mut pruned := V3PrunedDeclarations{}
 	if a.cached_header_sources.len == 0 || v3_program_lists_its_functions(a) {
 		return pruned
@@ -206,7 +207,8 @@ fn prune_unreferenced_cached_functions(mut a flat.FlatAst, keep []string) V3Prun
 	for i, id in candidates {
 		node := a.nodes[id]
 		short := node.value.all_after_last('.')
-		if named[node.value] || named[short] {
+		if named[node.value] || named[short]
+			|| '${candidate_modules[i].all_after_last('.')}.${short}' in keep_in_modules {
 			continue
 		}
 		a.nodes[id].kind = .empty

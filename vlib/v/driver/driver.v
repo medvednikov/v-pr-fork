@@ -12191,10 +12191,10 @@ pub fn run(args []string) {
 		&& vls_line_info == '' && !served.from_server && target.os != 'windows' {
 		mut kept_functions := markused.seeded_fn_names()
 		kept_functions << cached_runtime_function_names
-		kept_functions << cached_module_function_names
 		kept_functions << module_lifecycle_function_names
 		kept_functions << v3_kept_cached_functions(&cache_state.manager)
-		pruned_declarations = prune_unreferenced_cached_functions(mut a, kept_functions)
+		pruned_declarations = prune_unreferenced_cached_functions(mut a, kept_functions,
+			cached_module_function_names)
 		if os.getenv('V3_CACHE_TRACE') != '' {
 			eprintln('  V3 cached declarations: left out ${pruned_declarations.count} functions that the program does not name')
 		}
