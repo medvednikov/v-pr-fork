@@ -14915,21 +14915,14 @@ pub fn run(args []string) {
 				// A build that links cached modules compiles their headers from the
 				// preprocessed form that the cache keeps.
 				mut generated_unit := ''
-				use_tcc_prelude := cache_with_tcc && cache_state.manager.enabled
-					&& tcc_source == 'src.c' && cache_state.parsed_from_source.len == 0
-					&& !is_debug && os.getenv('V3_TCC_NO_PRELUDE_CACHE') != '1'
-				// An executable that is kept is one of the headers that the unit reads:
-				// what they are is found out for it as well.
-				if use_tcc_prelude || program_link_inputs.taken {
-					unit_file := os.join_path_single(cc_dir, tcc_source)
-					unit := os.read_file(unit_file) or { '' }
-					prelude := v3_tcc_prelude(&cache_state.manager, unit, tcc_path, tcc_args,
+				mut prelude_inputs := V3HeaderInputs{}
+				if cache_with_tcc && cache_state.manager.enabled && tcc_source == 'src.c'
+					&& cache_state.parsed_from_source.len == 0 && !is_debug
+					&& os.getenv('V3_TCC_NO_PRELUDE_CACHE') != '1' {
+					unit := os.read_file(cc_src) or { '' }
+					if prelude := v3_tcc_prelude(&cache_state.manager, unit, tcc_path, tcc_args,
 						tcc_source, cc_dir)
-					if unit.len == 0 {
-						program_link_inputs.unknown = 'the C of the program cannot be read'
-					}
-					program_link_inputs.add_tcc_headers(&prelude)
-					if use_tcc_prelude && prelude.unit.len > 0 {
+					{
 						if os.getenv('V3_TCC_PRELUDE_VERIFY') == '1'
 							&& !v3_tcc_units_compile_alike(tcc_path, tcc_args, tcc_source, cc_dir, unit, prelude.unit) {
 							eprintln('V3 TinyCC prelude: the preprocessed headers change the object of ${cc_src}')
@@ -14937,18 +14930,41 @@ pub fn run(args []string) {
 						}
 						os.write_file(cc_src, prelude.unit) or {}
 						generated_unit = unit
+						prelude_inputs = prelude.inputs
 					}
 				}
 				if keep_unit := os.getenv_opt('V3_CACHE_KEEP_PROGRAM_C') {
 					os.cp(cc_src, keep_unit) or {}
 				}
-				mut linked := run_v3_tcc_executable_link(tcc_path, tcc_args, cc_dir, cc_out)
+				// An executable that is kept is one of the headers that its C reads:
+				// TinyCC writes down the ones that it reads itself.
+				mut link_args := tcc_args.clone()
+				if program_link_inputs.taken {
+					link_args << ['-MD', '-MF', v3_program_dependency_file]
+				}
+				// Whole seconds, and one to spare for a file system that rounds them.
+				before_tcc := time.utc().unix() - 1
+				mut linked := run_v3_tcc_executable_link(tcc_path, link_args, cc_dir, cc_out)
+				mut read_preprocessed_headers := generated_unit.len > 0
 				if linked.exit_code != 0 && generated_unit.len > 0
 					&& v3_c_output_reports_source_error(linked.output) {
 					// The unit as it was generated decides what becomes of the build.
 					v3_trace_tcc_prelude('not used: ${linked.output.all_before('\n')}')
 					os.write_file(cc_src, generated_unit) or {}
-					linked = run_v3_tcc_executable_link(tcc_path, tcc_args, cc_dir, cc_out)
+					read_preprocessed_headers = false
+					linked = run_v3_tcc_executable_link(tcc_path, link_args, cc_dir, cc_out)
+				}
+				if program_link_inputs.taken && linked.exit_code == 0 {
+					if read_preprocessed_headers {
+						if v3_c_mentions_compile_time(generated_unit) {
+							prelude_inputs.mentions_time = true
+						}
+						program_link_inputs.add_header_inputs(&prelude_inputs)
+					} else {
+						program_link_inputs.add_compiled_headers(link_args, cc_dir, os.read_file(os.join_path_single(cc_dir,
+							tcc_source)) or { '' }, v3_tcc_include_search(tcc_path, v3_tcc_preprocess_args(tcc_args,
+							tcc_source), cc_dir), before_tcc)
+					}
 				}
 				linked
 			}
@@ -15055,9 +15071,15 @@ pub fn run(args []string) {
 						}))
 				}
 				result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
-				if program_executable_enabled && result.exit_code == 0 {
-					program_link_inputs.add_compiler_headers(&cache_state.manager, c_compiler,
-						cc_args, cc_dir, os.read_file(cc_src) or { '' }, before_cc)
+				if program_executable_enabled && result.exit_code == 0
+					&& v3_compiled_sources(cc_args).len > 0 {
+					if search := v3_include_search(&cache_state.manager, c_compiler, cc_args, cc_dir) {
+						program_link_inputs.add_compiled_headers(cc_args, cc_dir, os.read_file(cc_src) or {
+							''
+						}, search, before_cc)
+					} else {
+						program_link_inputs.unknown = 'the compiler did not tell where it looks for headers'
+					}
 				}
 			}
 			if result.exit_code == v3_parallel_cc_monolithic_exit_code

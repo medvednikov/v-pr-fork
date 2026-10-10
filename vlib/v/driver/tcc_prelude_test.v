@@ -54,14 +54,15 @@ fn test_preprocess_args_are_the_compile_args_without_output_inputs_and_link_opti
 	assert v3_tcc_preprocess_args(args, 'src.c') == ['-std=gnu11', '-fPIC', '-B/tcc/lib',
 		'-I/tcc/lib/include', '-w', '-Werror=implicit-function-declaration', '-DGC_THREADS=1',
 		'-I', '/gc/include']
-	first, later := v3_tcc_include_dirs(v3_tcc_preprocess_args(args, 'src.c'))
+	first, system, own := v3_tcc_include_dirs(v3_tcc_preprocess_args(args, 'src.c'))
 	assert first == ['/tcc/lib/include', '/gc/include']
-	// TinyCC's own headers are named by `-I` here, and are searched in that place.
-	assert later == []
-	first_only, later_only := v3_tcc_include_dirs(['-B/tcc/lib', '-I/a', '-isystem', '/sys',
-		'-isystem/other', '-I', '/b'])
+	assert system == []
+	assert own == ['/tcc/lib/include']
+	first_only, system_only, own_only := v3_tcc_include_dirs(['-B/tcc/lib', '-I/a', '-isystem',
+		'/sys', '-isystem/other', '-I', '/b'])
 	assert first_only == ['/a', '/b']
-	assert later_only == ['/tcc/lib/include', '/sys', '/other']
+	assert system_only == ['/sys', '/other']
+	assert own_only == ['/tcc/lib/include']
 }
 
 fn test_has_include_names_are_found() {
@@ -92,41 +93,16 @@ fn test_first_missing_path_is_the_first_component_that_is_absent() {
 		'absent')
 }
 
-fn test_prelude_inputs_are_the_files_read_and_the_places_a_file_could_appear() {
-	root := os.join_path(os.vtmp_dir(), 'v3_driver_tcc_prelude_inputs_${os.getpid()}')
-	os.rmdir_all(root) or {}
-	defer {
-		os.rmdir_all(root) or {}
-	}
-	first := os.join_path(root, 'first')
-	second := os.join_path(root, 'second')
-	os.mkdir_all(os.join_path(second, 'sys'))!
-	os.mkdir_all(first)!
-	header := os.join_path(second, 'sys', 'wait.h')
-	os.write_file(header, '#if __has_include(<optional.h>)\n#endif\n')!
-	preprocessed := '# 1 "prelude.c"\n# 1 "${header}" 1\nint wait(void);\n# 2 "prelude.c" 2\n'
-	inputs := v3_tcc_prelude_inputs(preprocessed, '#include <sys/wait.h>\n', [first, second],
-		[]string{}, '')
-	assert inputs.files == [header]
-	// `sys/wait.h` would be found in the first directory if `sys` appeared there,
-	// and `optional.h` in either.
-	assert inputs.missing == [os.join_path(first, 'optional.h'), os.join_path(first, 'sys'),
-		os.join_path(second, 'optional.h')]
-	assert inputs.of_the_build == ''
-	assert v3_tcc_split_preprocessed(preprocessed).text() == 'int wait(void);\n'
-	// A directory that is searched after the one of the header cannot hide it.
-	reversed := v3_tcc_prelude_inputs(preprocessed, '', [second, first], []string{}, '')
-	assert reversed.missing == [os.join_path(first, 'optional.h'), os.join_path(second, 'optional.h')]
-	// The place of a directory that is no `-I` one is not known: it counts as both.
-	unordered := v3_tcc_prelude_inputs(preprocessed, '', []string{}, [second, first], '')
-	assert os.join_path(first, 'sys') in unordered.missing
+fn test_preprocessed_files_are_those_of_the_line_markers() {
+	build_dir := '/build/dir'
+	preprocessed := '# 1 "${v3_tcc_prelude_input_name}"\n# 1 "<command line>" 1\n# 1 "/usr/include/a.h" 1\nint a;\n# 1 "generated.h" 1\nint g;\n# 1 "../shared/b.h" 1\n# 2 "/usr/include/a.h" 2\n'
+	files, of_the_build := v3_preprocessed_files(preprocessed, build_dir)
 	// The preprocessor names a file below the directory that it runs in relative to
 	// it: such a file is one that the build made for itself.
-	build_dir := os.join_path(root, 'build')
-	local := '# 1 "${v3_tcc_prelude_input_name}"\n# 1 "generated.h" 1\nint g;\n# 1 "../second/sys/wait.h" 1\n'
-	of_build := v3_tcc_prelude_inputs(local, '', [first, second], []string{}, build_dir)
-	assert of_build.of_the_build == os.join_path(build_dir, 'generated.h')
-	assert of_build.files == [header]
+	assert files.sorted() == ['/build/shared/b.h', '/usr/include/a.h']
+	assert of_the_build == '/build/dir/generated.h'
+	plain, none_of_the_build := v3_preprocessed_files('# 1 "/usr/include/a.h" 1\n', build_dir)
+	assert plain == ['/usr/include/a.h'] && none_of_the_build == ''
 }
 
 fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
@@ -139,38 +115,55 @@ fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
 	header := os.join_path(root, 'a.h')
 	absent := os.join_path(root, 'b.h')
 	os.write_file(header, 'int a;\n')!
-	// A time after the header was written: the preprocessor that starts then
-	// reads the header as it is now.
-	later := time.utc().unix() + 10
-	if modulecache.file_metadata_signature(header) == '' {
+	identity := modulecache.file_metadata_signature(header)
+	// Inputs that cannot all be told leave no stamp.
+	assert v3_tcc_prelude_stamp('key', V3HeaderInputs{
+		files:      [header]
+		identities: [identity]
+		unknown:    'a header appeared'
+	}, '') == none
+	assert v3_tcc_prelude_stamp('key', V3HeaderInputs{ files: [header] }, '') == none
+	if identity == '' {
 		// This file system cannot tell a later edit apart: nothing is kept for it.
-		assert v3_tcc_prelude_stamp('key', V3TccPreludeInputs{ files: [header] }, later, '') == none
 		return
 	}
-	// A header that was written when the preprocessor had started may not be the
-	// one that it read.
-	assert v3_tcc_prelude_stamp('key', V3TccPreludeInputs{ files: [header] }, time.utc().unix() - 10,
-		'') == none
-	stamp := v3_tcc_prelude_stamp('key', V3TccPreludeInputs{
-		files:   [header]
-		missing: [absent]
-	}, later, '') or {
+	stamp := v3_tcc_prelude_stamp('key', V3HeaderInputs{
+		files:      [header]
+		identities: [identity]
+		missing:    [absent]
+	}, '') or {
 		assert false, 'a header with an identity can be recorded'
 		return
 	}
 	assert v3_tcc_prelude_stamp_is_valid(stamp, 'key')
-	assert v3_tcc_prelude_stamp_unusable(stamp) == ''
-	// Why a preprocessed form cannot be used holds as long as the inputs do.
-	unusable := v3_tcc_prelude_stamp('key', V3TccPreludeInputs{
-		files:   [header]
-		missing: [absent]
-	}, later, 'its macros change\nthe C') or {
+	record := v3_read_tcc_prelude_stamp(stamp, 'key') or {
+		assert false, 'the stamp is read back'
+		return
+	}
+	assert record.unusable == '' && !record.inputs.mentions_time
+	assert record.inputs.files == [header] && record.inputs.identities == [identity]
+	assert record.inputs.missing == [absent]
+	// Why a preprocessed form cannot be used holds as long as the inputs do, and
+	// so does what the headers say of the time.
+	unusable := v3_tcc_prelude_stamp('key', V3HeaderInputs{
+		files:         [header]
+		identities:    [identity]
+		missing:       [absent]
+		mentions_time: true
+	}, 'its macros change\nthe C') or {
 		assert false, 'a prelude that cannot be used can be recorded'
 		return
 	}
 	assert v3_tcc_prelude_stamp_is_valid(unusable, 'key')
-	assert v3_tcc_prelude_stamp_unusable(unusable) == 'its macros change the C'
+	unusable_record := v3_read_tcc_prelude_stamp(unusable, 'key') or {
+		assert false, 'the stamp is read back'
+		return
+	}
+	assert unusable_record.unusable == 'its macros change the C'
+	assert unusable_record.inputs.mentions_time
+	assert unusable_record.inputs.files == [header]
 	assert !v3_tcc_prelude_stamp_is_valid(stamp, 'other key')
+	assert v3_read_tcc_prelude_stamp(stamp, 'other key') == none
 	assert !v3_tcc_prelude_stamp_is_valid(stamp.all_before_last('complete=1'), 'key')
 	// A header that appears where none was changes what an include finds.
 	os.write_file(absent, 'int b;\n')!
@@ -252,44 +245,33 @@ fn test_c_tokens_text_keeps_what_separates_tokens_and_what_literals_hold() {
 }
 
 fn test_include_directories_of_the_environment_come_after_those_of_the_command() {
-	saved := os.getenv_opt('CPATH')
+	saved := ['CPATH', 'C_INCLUDE_PATH'].map(os.getenv_opt(it))
 	defer {
-		if value := saved {
-			os.setenv('CPATH', value, true)
-		} else {
-			os.unsetenv('CPATH')
+		for i, name in ['CPATH', 'C_INCLUDE_PATH'] {
+			if value := saved[i] {
+				os.setenv(name, value, true)
+			} else {
+				os.unsetenv(name)
+			}
 		}
 	}
 	os.setenv('CPATH', ['/env/first', '', '/env/second', '/env/first'].join(os.path_delimiter),
 		true)
-	assert v3_tcc_environment_include_dirs() == ['/env/first', '/env/second']
+	assert v3_environment_dirs('CPATH') == ['/env/first', '/env/second']
 	os.unsetenv('CPATH')
-	assert v3_tcc_environment_include_dirs() == []
+	assert v3_environment_dirs('CPATH') == []
 	assert v3_tcc_absolute_include_dirs(['/a', 'inc', '../shared', '/a'], '/build/dir') == [
 		'/a',
 		'/build/dir/inc',
 		'/build/shared',
 	]
-	// A header of a directory of CPATH is hidden by one that appears in a directory
-	// of `-I`, and by one in a directory of CPATH that comes before its own.
-	root := os.join_path(os.vtmp_dir(), 'v3_driver_tcc_prelude_cpath_${os.getpid()}')
-	os.rmdir_all(root) or {}
-	defer {
-		os.rmdir_all(root) or {}
-	}
-	option_dir := os.join_path(root, 'option')
-	first := os.join_path(root, 'first')
-	later := os.join_path(root, 'later')
-	system := os.join_path(root, 'system')
-	for dir in [option_dir, first, later, system] {
-		os.mkdir_all(dir)!
-	}
-	header := os.join_path(later, 'choice.h')
-	os.write_file(header, 'int choice;\n')!
-	preprocessed := '# 1 "${v3_tcc_prelude_input_name}"\n# 1 "${header}" 1\nint choice;\n'
-	inputs := v3_tcc_prelude_inputs(preprocessed, '', [option_dir, first, later], [system],
-		os.join_path(root, 'build'))
-	assert inputs.of_the_build == ''
-	assert inputs.files == [header]
-	assert inputs.missing == [os.join_path(first, 'choice.h'), os.join_path(option_dir, 'choice.h')]
+	// TinyCC searches the directories of `-I`, of CPATH, of `-isystem`, of
+	// C_INCLUDE_PATH and its own, in that order, and then those of the system.
+	os.setenv('CPATH', '/env/cpath', true)
+	os.setenv('C_INCLUDE_PATH', '/env/c_include', true)
+	search := v3_tcc_include_search('/nonexistent/tcc', ['-B/tcc/lib', '-isystem', '/sys', '-I/option'],
+		'/build/dir')
+	assert search.dirs == ['/option', '/env/cpath', '/sys', '/env/c_include', '/tcc/lib/include']
+	assert search.frameworks == []
+	assert search.absent == []
 }

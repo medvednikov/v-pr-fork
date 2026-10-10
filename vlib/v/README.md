@@ -559,18 +559,24 @@ to the files and libraries that it names. The identities of the link inputs are 
 linker starts and compared again before the executable is kept, so a file that is replaced in
 between leaves none.
 The headers that the C compiler read for the C of the program are inputs like the files of the
-link, since a build that restores the executable does not compile that C again: TinyCC's are
-those of the preprocessed headers described below, and a compiler driver writes its own down
-while it compiles (`-MD`). A header that appears where an `#include` would find it first counts
-as a change; the driver is asked once for a module cache, a set of arguments and an environment
-where it searches (`-E -v`). No executable is kept when a header is as new as the build that
-read it, or when one command compiles more than one source, as the driver then tells the
-headers of the last one only. An object that the compiler itself keeps of the program, as the
-development builds on macOS below do, is not compiled again by a build that links either.
+link, since a build that restores the executable does not compile that C again. The compiler
+writes them down while it compiles (`-MD`, which TinyCC has too); a TinyCC build that read
+the preprocessed headers described below takes theirs. A header that appears where an
+`#include` would find it first counts as a change: in a directory that is searched earlier, or,
+for a name in quotation marks, next to the file that includes it. A compiler driver is asked
+once for a module cache, a set of arguments and an environment where it searches (`-E -v`, with
+its messages in English). No executable is kept when a header is as new as the build that read
+it, when a header appeared in an earlier place while the compiler ran, when the C or a header
+spells `__DATE__`, `__TIME__` or `__TIMESTAMP__`, or when one command compiles more than one
+source, as the driver then tells the headers of the last one only. An object that the compiler
+itself keeps of the program, as the development builds on macOS below do, is not compiled again
+by a build that links either.
 None is kept either when the command has an input that cannot be followed: a thin archive, whose
 members are other files, a response file, a file list, a linker script that does more than name
 its inputs, a path that leaves the directory of the build, or an option for the linker that is
-not among those whose inputs are known (`program_link_inputs.v` lists them). The copy in the
+not among those whose inputs are known (`program_link_inputs.v` lists them). The command of
+the linker is read in the order of the compiler's: an option takes the value that follows it,
+however the two were given (`-Wl,-rpath /dir`). The copy in the
 cache is a file of its own: changing or removing the output changes nothing there, and an
 executable that is restored gets the permissions that the umask of the caller leaves, as a
 linked one does. Builds that leave more than an executable behind run in
@@ -590,7 +596,8 @@ operator or `str`, and so do exported functions, those marked `@[markused]`, `in
 the functions that mark-used seeds, and the functions that a stage of the compiler spells in a
 string literal: those of the runtime by their names (`cached_runtime_function_names`) and those
 of any other module of vlib with the name of the module, as `dl.interface_export_find`
-(`cached_module_function_names`); a test keeps both lists complete. A stage that finds no
+(`cached_module_function_names`, which keeps the function of that module only); a test keeps
+both lists complete. A stage that finds no
 declaration of such a function can do something else without a word. The C generator
 checks the result: when the generated C names a function that was left out, or the C compiler
 reports an error in the program unit, the build starts again with every declaration, and records

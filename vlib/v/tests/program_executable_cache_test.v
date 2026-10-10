@@ -679,12 +679,14 @@ fn test_notices_of_a_program_built_from_cached_c_are_kept_with_its_executable() 
 }
 
 // built_without_the_cached_executable builds like `build`, with a build that
-// compiles and links whatever an earlier one kept, and returns what the program
-// prints.
+// compiles the headers of the program and links whatever an earlier one kept, and
+// returns what the program prints.
 fn built_without_the_cached_executable(root string, flags []string, main_file string, name string) string {
 	os.setenv('V3_CACHE_DISABLE_PROGRAM_EXECUTABLE', '1', true)
+	os.setenv('V3_TCC_NO_PRELUDE_CACHE', '1', true)
 	build(root, flags, main_file, name)
 	os.unsetenv('V3_CACHE_DISABLE_PROGRAM_EXECUTABLE')
+	os.unsetenv('V3_TCC_NO_PRELUDE_CACHE')
 	return run_built(root, name)
 }
 
@@ -750,6 +752,42 @@ fn test_headers_that_the_c_of_a_program_reads_are_inputs_of_the_executable() {
 		if expected_shadowed == '3' {
 			assert !restored(shadowed), shadowed
 			assert shadowed.contains('V3 program executable miss: a file appeared where the compiler or the linker looks'), shadowed
+		}
+
+		// A header includes another in quotation marks: the directory of the header
+		// is where the compiler looks for that one first.
+		outer := 'nested/outer_${name}'
+		inner := 'inner_${name}'
+		os.mkdir_all(os.join_path(first, 'nested'))!
+		os.write_file(os.join_path(first, outer), '#include "${inner}"\n')!
+		os.write_file(os.join_path(later, inner), 'static inline int nested_answer(void) { return 1; }\n')!
+		os.write_file(main_file, '#include <${outer}>\n\nfn C.nested_answer() int\n\nfn main() {\n\tprintln(C.nested_answer())\n}\n')!
+		time.sleep(2200 * time.millisecond)
+		assert_rebuilt(build(root, flags, main_file, 'nested'))
+		assert run_built(root, 'nested') == '1'
+		assert_restored(build(root, flags, main_file, 'nested_same'))
+		os.write_file(os.join_path(first, 'nested', inner), 'static inline int nested_answer(void) { return 2; }\n')!
+		time.sleep(2200 * time.millisecond)
+		nested := build(root, flags, main_file, 'nested_shadowed')
+		expected_nested := built_without_the_cached_executable(root, flags, main_file,
+			'nested_linked')
+		assert run_built(root, 'nested_shadowed') == expected_nested, nested
+		if expected_nested == '2' {
+			assert !restored(nested), nested
+		}
+
+		// A header that asks for the time of the compilation makes another program
+		// each time it is compiled: no executable is kept of it.
+		os.write_file(os.join_path(later, name), 'static inline const char *header_answer(void) { return __DATE__ " " __TIME__; }\n')!
+		os.write_file(main_file, '#include <${name}>\n\nfn C.header_answer() &char\n\nfn main() {\n\tprintln(unsafe { cstring_to_vstring(C.header_answer()) })\n}\n')!
+		os.rm(os.join_path(first, name))!
+		time.sleep(2200 * time.millisecond)
+		timed := build(root, flags, main_file, 'timed')
+		assert run_built(root, 'timed').len == 'Jan  1 2026 00:00:00'.len
+		compiles_each_time := flags == ['-usecache'] || os.user_os() != 'macos'
+		if compiles_each_time || timed.contains('V3 program executable not cached') {
+			assert timed.contains('V3 program executable not cached: the C of the program asks for the time of its compilation'), timed
+			assert !restored(build(root, flags, main_file, 'timed_again'))
 		}
 	}
 }

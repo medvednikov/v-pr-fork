@@ -117,11 +117,13 @@ fn v3_tcc_preprocess_args(tcc_args []string, source_name string) []string {
 }
 
 // v3_tcc_include_dirs returns the directories that `args` make TinyCC search for
-// an included file: those of `-I`, which it searches first and in the order they
-// are given, and the others, its own headers among them, which come after them.
-fn v3_tcc_include_dirs(args []string) ([]string, []string) {
+// an included file, each kind in the order it is given: those of `-I`, which it
+// searches first, those of `-isystem`, which come after the ones of the
+// environment, and its own headers, which come after all of these.
+fn v3_tcc_include_dirs(args []string) ([]string, []string, []string) {
 	mut first := []string{}
-	mut later := []string{}
+	mut system := []string{}
+	mut own := []string{}
 	mut i := 0
 	for i < args.len {
 		clean := args[i].trim_space()
@@ -132,14 +134,14 @@ fn v3_tcc_include_dirs(args []string) ([]string, []string) {
 				i++
 				if clean == '-I' && dir !in first {
 					first << dir
-				} else if clean == '-isystem' && dir !in later {
-					later << dir
+				} else if clean == '-isystem' && dir !in system {
+					system << dir
 				}
 			}
 		} else if clean.starts_with('-isystem') {
 			dir := clean['-isystem'.len..].trim_space()
-			if dir !in later {
-				later << dir
+			if dir !in system {
+				system << dir
 			}
 		} else if clean.starts_with('-I') {
 			dir := clean[2..].trim_space()
@@ -148,12 +150,12 @@ fn v3_tcc_include_dirs(args []string) ([]string, []string) {
 			}
 		} else if clean.starts_with('-B') {
 			dir := os.join_path_single(clean[2..].trim_space(), 'include')
-			if dir !in later {
-				later << dir
+			if dir !in own {
+				own << dir
 			}
 		}
 	}
-	return first, later.filter(it !in first)
+	return first, system, own
 }
 
 // v3_tcc_default_include_dirs returns the absolute directories that TinyCC searches
@@ -252,19 +254,6 @@ fn v3_has_include_names(source string) []string {
 	return names
 }
 
-// V3TccPreludeInputs is what the preprocessed form of a prelude depends on besides
-// its text and the command: the files that the preprocessor read, and the paths
-// where a file that is not there would be found instead of, or in addition to, one
-// of them.
-struct V3TccPreludeInputs {
-mut:
-	files   []string
-	missing []string
-	// A file that the build made for itself and that the prelude includes: it is
-	// another one in the next build, under the same name.
-	of_the_build string
-}
-
 // v3_preprocessed_files returns the files that the line markers of preprocessed C
 // name, which are all that the preprocessor read, and one of them that the build
 // made for itself in `build_dir`, if there is one.
@@ -302,85 +291,11 @@ fn v3_preprocessed_files(preprocessed string, build_dir string) ([]string, strin
 	return files.keys(), of_the_build
 }
 
-// v3_tcc_prelude_inputs works the inputs out from the output of the preprocessor,
-// whose line markers name every file that it read: see v3_header_inputs.
-fn v3_tcc_prelude_inputs(preprocessed string, prelude string, first_dirs []string, later_dirs []string, build_dir string) V3TccPreludeInputs {
-	read, of_the_build := v3_preprocessed_files(preprocessed, build_dir)
-	mut inputs := v3_header_inputs(read, prelude, first_dirs, later_dirs)
-	inputs.of_the_build = of_the_build
-	return inputs
-}
-
-// v3_header_inputs returns what the C of a unit depends on besides its text and
-// the command that compiles it, given the files that the compiler `read` for it.
-// `first_dirs` are the include directories that are searched first and in that
-// order, `later_dirs` those that come after them, in an order that is not known
-// here. A file of the name of one that was read would be found instead of it in
-// any directory that is searched before the one it is in: for each such directory,
-// the path where it is not is an input. So is each directory for a name that
-// `unit` or one of the files asks `__has_include` about.
-fn v3_header_inputs(read []string, unit string, first_dirs []string, later_dirs []string) V3TccPreludeInputs {
-	mut include_dirs := first_dirs.clone()
-	include_dirs << later_dirs
-	mut files := map[string]bool{}
-	for path in read {
-		files[path] = true
-	}
-	mut missing := map[string]bool{}
-	mut asked := v3_has_include_names(unit)
-	for path in read {
-		text := os.read_file(path) or { '' }
-		if text.contains('__has_include') {
-			for name in v3_has_include_names(text) {
-				if name !in asked {
-					asked << name
-				}
-			}
-		}
-		for dir in include_dirs {
-			if !path.starts_with(dir + '/') {
-				continue
-			}
-			relative := path[dir.len + 1..]
-			position := first_dirs.index(dir)
-			for other_position, other in include_dirs {
-				// A directory of `-I` is searched before those given after it, and
-				// before every directory that is no `-I` one.
-				if other == dir || (position >= 0 && other_position > position) {
-					continue
-				}
-				absent := v3_first_missing_path(other, relative)
-				if absent.len > 0 {
-					missing[absent] = true
-				}
-			}
-		}
-	}
-	for name in asked {
-		for dir in include_dirs {
-			absent := v3_first_missing_path(dir, name)
-			if absent.len > 0 {
-				missing[absent] = true
-			} else {
-				files[os.join_path_single(dir, name)] = true
-			}
-		}
-	}
-	mut inputs := V3TccPreludeInputs{
-		files:   files.keys()
-		missing: missing.keys()
-	}
-	inputs.files.sort()
-	inputs.missing.sort()
-	return inputs
-}
-
-// v3_tcc_environment_include_dirs returns the directories of CPATH, which TinyCC
-// searches after those of `-I` and before every other, in the order they are
-// given. It does not tell them when it is asked where it searches.
-fn v3_tcc_environment_include_dirs() []string {
+// v3_environment_dirs returns the directories that the variable `name` of the
+// environment lists, as CPATH and C_INCLUDE_PATH do for a C compiler.
+fn v3_environment_dirs(name string) []string {
 	mut dirs := []string{}
-	for dir in os.getenv('CPATH').split(os.path_delimiter) {
+	for dir in os.getenv(name).split(os.path_delimiter) {
 		if dir.len > 0 && dir !in dirs {
 			dirs << dir
 		}
@@ -399,6 +314,22 @@ fn v3_tcc_absolute_include_dirs(dirs []string, build_dir string) []string {
 		}
 	}
 	return absolute
+}
+
+// v3_tcc_include_search returns where TinyCC looks for an included file when it
+// runs with `args` in `cc_dir`, in the order in which it searches: the directories
+// of `-I`, those of CPATH, those of `-isystem`, those of C_INCLUDE_PATH, its own
+// headers, and the ones of the system, which it tells when it is asked.
+fn v3_tcc_include_search(tcc_path string, args []string, cc_dir string) V3IncludeSearch {
+	mut dirs, system_dirs, own_dirs := v3_tcc_include_dirs(args)
+	dirs << v3_environment_dirs('CPATH')
+	dirs << system_dirs
+	dirs << v3_environment_dirs('C_INCLUDE_PATH')
+	dirs << own_dirs
+	dirs << v3_tcc_default_include_dirs(tcc_path, args, cc_dir)
+	return V3IncludeSearch{
+		dirs: v3_tcc_absolute_include_dirs(dirs, cc_dir)
+	}
 }
 
 // V3TccPreprocessed is what a preprocessor made of a prelude: the C, and the
@@ -602,78 +533,91 @@ fn v3_tcc_preprocessed_forms_match(first &V3TccPreprocessed, second &V3TccPrepro
 // v3_tcc_prelude_stamp records the inputs of a preprocessed prelude, and in
 // `unusable` why the preprocessed form cannot stand for it, when it cannot: that
 // holds as long as the inputs stay what they are, and a build need not find it out
-// again. `before` is a
-// time, in seconds, from before the preprocessor started. The files that it read
-// are known only from what it printed, so their metadata is taken after it has
-// read them: a file that was written or put in place at `before` or later may not
-// be the one that was read, and nothing is recorded then.
-fn v3_tcc_prelude_stamp(key string, inputs V3TccPreludeInputs, before i64, unusable string) ?string {
+// again. Nothing is recorded for inputs that cannot all be told.
+fn v3_tcc_prelude_stamp(key string, inputs V3HeaderInputs, unusable string) ?string {
+	if inputs.unknown.len > 0 || inputs.files.len != inputs.identities.len {
+		return none
+	}
 	mut out := strings.new_builder(128 + inputs.files.len * 128 + inputs.missing.len * 96)
 	out.writeln('format=${v3_tcc_prelude_format}')
 	out.writeln('key=${key}')
 	if unusable.len > 0 {
 		out.writeln('unusable=${unusable.replace('\n', ' ')}')
 	}
-	for path in inputs.files {
-		metadata := modulecache.file_metadata_signature(path)
-		if metadata.len == 0 || path.contains_any('\t\n') {
-			return none
-		}
-		attributes := os.stat(path) or { return none }
-		if attributes.mtime >= before || attributes.ctime >= before {
-			return none
-		}
-		out.writeln('file=${path}\t${metadata}')
+	if inputs.mentions_time {
+		out.writeln('mentions_time=1')
+	}
+	for i, path in inputs.files {
+		out.writeln('file=${path}\t${inputs.identities[i]}')
 	}
 	for path in inputs.missing {
-		if path.contains_any('\n') {
-			return none
-		}
 		out.writeln('missing=${path}')
 	}
 	out.writeln('complete=1')
 	return out.str()
 }
 
-fn v3_tcc_prelude_stamp_is_valid(stamp string, key string) bool {
+// V3TccPreludeRecord is what a stamp says of a prelude: its inputs, and why its
+// preprocessed form is not used, or '' when it is.
+struct V3TccPreludeRecord {
+mut:
+	unusable string
+	inputs   V3HeaderInputs
+}
+
+// v3_read_tcc_prelude_stamp returns what the stamp of the prelude `key` says, or
+// none for a stamp of another prelude or of another form.
+fn v3_read_tcc_prelude_stamp(stamp string, key string) ?V3TccPreludeRecord {
 	lines := stamp.split_into_lines()
 	if lines.len < 3 || lines[0] != 'format=${v3_tcc_prelude_format}' || lines[1] != 'key=${key}'
 		|| lines.last() != 'complete=1' {
-		return false
+		return none
 	}
+	mut record := V3TccPreludeRecord{}
 	for line in lines[2..lines.len - 1] {
 		if line.starts_with('unusable=') {
-			continue
-		}
-		if line.starts_with('file=') {
+			record.unusable = line['unusable='.len..]
+		} else if line == 'mentions_time=1' {
+			record.inputs.mentions_time = true
+		} else if line.starts_with('file=') {
 			tab := line.last_index_u8(`\t`)
 			if tab <= 'file='.len {
-				return false
+				return none
 			}
-			if modulecache.file_metadata_signature(line['file='.len..tab]) != line[tab + 1..] {
-				v3_trace_tcc_prelude('a header changed: ${line['file='.len..tab]}')
-				return false
-			}
+			record.inputs.files << line['file='.len..tab]
+			record.inputs.identities << line[tab + 1..]
 		} else if line.starts_with('missing=') {
-			if os.exists(line['missing='.len..]) {
-				v3_trace_tcc_prelude('a header appeared: ${line['missing='.len..]}')
-				return false
-			}
+			record.inputs.missing << line['missing='.len..]
 		} else {
+			return none
+		}
+	}
+	return record
+}
+
+// v3_tcc_prelude_inputs_are_unchanged reports whether every header of `inputs` is
+// the file that it was, and no header is where none was.
+fn v3_tcc_prelude_inputs_are_unchanged(inputs &V3HeaderInputs) bool {
+	for i, path in inputs.files {
+		if modulecache.file_metadata_signature(path) != inputs.identities[i] {
+			v3_trace_tcc_prelude('a header changed: ${path}')
+			return false
+		}
+	}
+	for path in inputs.missing {
+		if os.exists(path) {
+			v3_trace_tcc_prelude('a header appeared: ${path}')
 			return false
 		}
 	}
 	return true
 }
 
-// v3_tcc_prelude_stamp_unusable returns why the prelude of `stamp` is compiled as it
-// is, or '' when its preprocessed form is used.
-fn v3_tcc_prelude_stamp_unusable(stamp string) string {
-	lines := stamp.split_into_lines()
-	if lines.len > 2 && lines[2].starts_with('unusable=') {
-		return lines[2]['unusable='.len..]
-	}
-	return ''
+// v3_tcc_prelude_stamp_is_valid reports whether `stamp` is that of the prelude
+// `key`, with inputs that are what they were.
+fn v3_tcc_prelude_stamp_is_valid(stamp string, key string) bool {
+	record := v3_read_tcc_prelude_stamp(stamp, key) or { return false }
+	return v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 }
 
 fn v3_trace_tcc_prelude(message string) {
@@ -695,76 +639,46 @@ fn v3_tcc_prelude_key(prelude string, tcc_path string, preprocess_args []string)
 	return '${hash.hex()}_${prelude.len}'
 }
 
-// V3TccPrelude is what a build knows of the headers of a program unit.
+// V3TccPrelude is the unit of a program in the form that reads its headers
+// preprocessed, with what that form depends on.
 struct V3TccPrelude {
-	// The unit with the part that includes its headers replaced by an `#include` of
-	// that part in preprocessed form, or '' when the unit is compiled as it is.
-	unit string
-	// Whether the unit includes a file at all.
-	has_headers bool
-	// The record of the files that the headers of the unit are and of the places
-	// where another would be found: see v3_tcc_prelude_stamp. It is '' when the
-	// headers cannot be told from changed ones.
-	stamp string
+	unit   string
+	inputs V3HeaderInputs
 }
 
-// v3_tcc_source_with_cached_prelude returns `source` with the part that includes
-// its headers replaced by an `#include` of that part in preprocessed form, which
-// it takes from the module cache or puts there. It returns none when `source` has
-// no such part, or when the preprocessed form cannot be made, kept or used: the
-// build then compiles `source` as it is.
-fn v3_tcc_source_with_cached_prelude(manager &modulecache.Manager, source string, tcc_path string, tcc_args []string, source_name string, cc_dir string) ?string {
-	prelude := v3_tcc_prelude(manager, source, tcc_path, tcc_args, source_name, cc_dir)
-	if prelude.unit.len == 0 {
-		return none
-	}
-	return prelude.unit
-}
-
-// v3_tcc_prelude finds out what the headers of the program unit `source` are for
-// TinyCC, and returns the unit in the form that reads them preprocessed when that
-// form can be used. What it finds is in the module cache for the builds that
-// follow, as long as the headers stay what they are.
-fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, tcc_args []string, source_name string, cc_dir string) V3TccPrelude {
-	if !source.contains('#include') {
-		return V3TccPrelude{}
-	}
+// v3_tcc_prelude returns `source`, the unit of a program, with the part that
+// includes its headers replaced by an `#include` of that part in preprocessed
+// form, which it takes from the module cache or puts there. It returns none when
+// `source` has no such part, or when the preprocessed form cannot be made, kept or
+// used: the build then compiles `source` as it is.
+fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, tcc_args []string, source_name string, cc_dir string) ?V3TccPrelude {
 	end := v3_tcc_prelude_end(source)
 	if end == 0 || !manager.enabled {
-		return V3TccPrelude{
-			has_headers: true
-		}
+		return none
 	}
-	unit, stamp := v3_tcc_prelude_of(manager, source, end, tcc_path, tcc_args, source_name, cc_dir)
-	return V3TccPrelude{
-		unit:        unit
-		has_headers: true
-		stamp:       stamp
-	}
-}
-
-// v3_tcc_prelude_of returns the two results of v3_tcc_prelude for a unit whose
-// headers end at `end`.
-fn v3_tcc_prelude_of(manager &modulecache.Manager, source string, end int, tcc_path string, tcc_args []string, source_name string, cc_dir string) (string, string) {
 	prelude := source[..end]
 	preprocess_args := v3_tcc_preprocess_args(tcc_args, source_name)
 	key := v3_tcc_prelude_key(prelude, tcc_path, preprocess_args)
 	cached := os.join_path(manager.dir, 'tcc_prelude_${key}.i')
 	stamp_path := cached + '.stamp'
 	if stamp := os.read_file(stamp_path) {
-		if v3_tcc_prelude_stamp_is_valid(stamp, key) {
-			unusable := v3_tcc_prelude_stamp_unusable(stamp)
-			if unusable.len > 0 {
-				v3_trace_tcc_prelude('not used: ${unusable}')
-				return '', stamp
-			}
-			if os.is_file(cached) {
-				return '#include "${c_include_path(cached)}"\n' + source[end..], stamp
+		if record := v3_read_tcc_prelude_stamp(stamp, key) {
+			if v3_tcc_prelude_inputs_are_unchanged(&record.inputs) {
+				if record.unusable.len > 0 {
+					v3_trace_tcc_prelude('not used: ${record.unusable}')
+					return none
+				}
+				if os.is_file(cached) {
+					return V3TccPrelude{
+						unit:   '#include "${c_include_path(cached)}"\n' + source[end..]
+						inputs: record.inputs
+					}
+				}
 			}
 		}
 	}
 	if !manager.ensure_dir() {
-		return '', ''
+		return none
 	}
 	prelude_file := os.join_path_single(cc_dir, v3_tcc_prelude_input_name)
 	output_file := os.join_path_single(cc_dir, 'v3_tcc_prelude_output.i')
@@ -778,7 +692,7 @@ fn v3_tcc_prelude_of(manager &modulecache.Manager, source string, end int, tcc_p
 	}
 	// The line after the prelude tells how far its headers counted.
 	os.write_file(prelude_file, '${prelude}\n${v3_tcc_prelude_counter_probe} __COUNTER__\n') or {
-		return '', ''
+		return none
 	}
 	// Whole seconds, and one to spare for a file system that rounds them.
 	before_preprocessing := time.utc().unix() - 1
@@ -787,72 +701,71 @@ fn v3_tcc_prelude_of(manager &modulecache.Manager, source string, end int, tcc_p
 	result := cmdexec.run_in(tcc_path, args, cc_dir)
 	if result.exit_code != 0 {
 		v3_trace_tcc_prelude('not preprocessed: ${result.output.all_before('\n')}')
-		return '', ''
+		return none
 	}
-	preprocessed := os.read_file(output_file) or { return '', '' }
-	mut first_dirs, mut later_dirs := v3_tcc_include_dirs(preprocess_args)
-	for dir in v3_tcc_environment_include_dirs() {
-		if dir !in first_dirs {
-			first_dirs << dir
-		}
-	}
-	for dir in v3_tcc_default_include_dirs(tcc_path, preprocess_args, cc_dir) {
-		if dir !in later_dirs {
-			later_dirs << dir
-		}
-	}
-	first_dirs = v3_tcc_absolute_include_dirs(first_dirs, cc_dir)
-	later_dirs = v3_tcc_absolute_include_dirs(later_dirs, cc_dir).filter(it !in first_dirs)
-	inputs := v3_tcc_prelude_inputs(preprocessed, prelude, first_dirs, later_dirs, cc_dir)
+	preprocessed := os.read_file(output_file) or { return none }
+	read, of_the_build := v3_preprocessed_files(preprocessed, cc_dir)
+	inputs := v3_header_inputs(read, prelude, v3_tcc_include_search(tcc_path, preprocess_args,
+		cc_dir), before_preprocessing)
 	mut form := v3_tcc_split_preprocessed(preprocessed)
 	if form.unusable.len == 0 && v3_tcc_source_has_build_time_macros(prelude) {
 		form.unusable = 'it asks for the time or the count of the compilation'
 	}
-	if form.unusable.len == 0 && inputs.of_the_build.len > 0 {
-		form.unusable = 'it includes a file that the build made: ${os.file_name(inputs.of_the_build)}'
+	if form.unusable.len == 0 && of_the_build.len > 0 {
+		form.unusable = 'it includes a file that the build made: ${os.file_name(of_the_build)}'
 	}
 	if form.unusable.len == 0 {
 		// A compiler that reads the form must see the C that the preprocessor made
 		// of the prelude: so it does when the form comes out of the preprocessor as
-		// it went in.
-		os.write_file(tmp, form.text()) or { return '', '' }
-		os.write_file(verify_file, '#include "${c_include_path(tmp)}"\n') or { return '', '' }
+		// it went in. A run that fails says nothing of the form: the next build
+		// asks again.
+		os.write_file(tmp, form.text()) or { return none }
+		os.write_file(verify_file, '#include "${c_include_path(tmp)}"\n') or { return none }
 		mut verify_args := preprocess_args.clone()
 		verify_args << ['-E', '-dD', '-o', os.file_name(output_file), os.file_name(verify_file)]
 		verified := cmdexec.run_in(tcc_path, verify_args, cc_dir)
-		again := if verified.exit_code == 0 { os.read_file(output_file) or { '' } } else { '' }
-		if again.len == 0 {
-			form.unusable = 'its preprocessed form cannot be preprocessed'
-		} else if !v3_tcc_preprocessed_forms_match(&form, v3_tcc_split_preprocessed(again)) {
+		if verified.exit_code != 0 {
+			v3_trace_tcc_prelude('not verified: ${verified.output.all_before('\n')}')
+			return none
+		}
+		again := os.read_file(output_file) or { return none }
+		if !v3_tcc_preprocessed_forms_match(&form, v3_tcc_split_preprocessed(again)) {
 			form.unusable = 'its macros change the C that they expanded to'
 		}
 	}
-	stamp := v3_tcc_prelude_stamp(key, inputs, before_preprocessing, form.unusable) or {
-		v3_trace_tcc_prelude('not kept: a header cannot be told apart from a changed one')
-		return '', ''
+	stamp := v3_tcc_prelude_stamp(key, inputs, form.unusable) or {
+		v3_trace_tcc_prelude('not kept: ${if inputs.unknown.len > 0 {
+			inputs.unknown
+		} else {
+			'a header cannot be told apart from a changed one'
+		}}')
+		return none
 	}
 	// The stamp commits the text: remove the old one before the text is replaced.
 	os.rm(stamp_path) or {}
 	if form.unusable.len == 0 {
-		os.mv(tmp, cached) or { return '', '' }
+		os.mv(tmp, cached) or { return none }
 	} else {
 		os.rm(cached) or {}
 	}
 	stamp_tmp := '${stamp_path}.tmp.${tempname.unique_token()}'
 	os.write_file(stamp_tmp, stamp) or {
 		os.rm(stamp_tmp) or {}
-		return '', ''
+		return none
 	}
 	os.mv(stamp_tmp, stamp_path) or {
 		os.rm(stamp_tmp) or {}
-		return '', ''
+		return none
 	}
 	if form.unusable.len > 0 {
 		v3_trace_tcc_prelude('not used: ${form.unusable}')
-		return '', stamp
+		return none
 	}
 	v3_trace_tcc_prelude('preprocessed ${prelude.len} bytes into ${cached}')
-	return '#include "${c_include_path(cached)}"\n' + source[end..], stamp
+	return V3TccPrelude{
+		unit:   '#include "${c_include_path(cached)}"\n' + source[end..]
+		inputs: inputs
+	}
 }
 
 // v3_tcc_units_compile_alike reports whether TinyCC makes the same object of two

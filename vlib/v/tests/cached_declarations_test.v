@@ -506,6 +506,23 @@ fn test_preprocessed_headers_follow_a_header_that_appears_earlier_in_the_search(
 	shadowed := build(root, flags, main_file, 'shadowed')
 	assert shadowed.contains('V3 TinyCC prelude: a header appeared'), shadowed
 	assert run_built(root, 'shadowed') == '2'
+
+	// A header includes another in quotation marks: the directory of the header is
+	// where TinyCC looks for that one first, before any directory of the search.
+	os.mkdir_all(os.join_path(first, 'nested'))!
+	os.write_file(os.join_path(first, 'nested', 'v_prelude_outer_test.h'), '#include "v_prelude_inner_test.h"\n')!
+	os.write_file(os.join_path(later, 'v_prelude_inner_test.h'), 'static inline int review_choice(void) { return 1; }\n')!
+	nested_source := source.replace('v_prelude_choice_test.h', 'nested/v_prelude_outer_test.h')
+	os.write_file(main_file, nested_source)!
+	settle_headers()
+	nested := build(root, flags, main_file, 'nested')
+	assert nested.contains('V3 TinyCC prelude: preprocessed'), nested
+	assert run_built(root, 'nested') == '1'
+	os.write_file(os.join_path(first, 'nested', 'v_prelude_inner_test.h'), 'static inline int review_choice(void) { return 2; }\n')!
+	os.write_file(main_file, nested_source + '\nfn added_2() {}\n')!
+	nested_shadowed := build(root, flags, main_file, 'nested_shadowed')
+	assert nested_shadowed.contains('V3 TinyCC prelude: a header appeared'), nested_shadowed
+	assert run_built(root, 'nested_shadowed') == '2'
 }
 
 fn test_functions_that_a_program_lists_at_run_time_are_all_there() {
