@@ -203,12 +203,16 @@ fn prune_unreferenced_cached_functions(mut a flat.FlatAst, keep []string, keep_i
 			named[node.value.all_after_last('.')] = true
 		}
 	}
+	mut kept_in_module := map[string]bool{}
+	for name in keep_in_modules {
+		kept_in_module[name] = true
+	}
 	mut taken_out := []bool{len: a.nodes.len}
 	for i, id in candidates {
 		node := a.nodes[id]
 		short := node.value.all_after_last('.')
 		if named[node.value] || named[short]
-			|| '${candidate_modules[i].all_after_last('.')}.${short}' in keep_in_modules {
+			|| kept_in_module['${candidate_modules[i].all_after_last('.')}.${short}'] {
 			continue
 		}
 		a.nodes[id].kind = .empty

@@ -568,15 +568,19 @@ once for a module cache, a set of arguments and an environment where it searches
 its messages in English). No executable is kept when a header is as new as the build that read
 it, when a header appeared in an earlier place while the compiler ran, when the C or a header
 spells `__DATE__`, `__TIME__` or `__TIMESTAMP__`, or when one command compiles more than one
-source, as the driver then tells the headers of the last one only. An object that the compiler
-itself keeps of the program, as the development builds on macOS below do, is not compiled again
-by a build that links either.
+source with a compiler driver, which then tells the headers of the last one only. What the
+headers of a compilation make its inputs is kept in the module cache too, so a build that read
+the same files, each the file that it was, does not read them once more to find that out. An
+object that the compiler itself keeps of the program, as the development builds on macOS below
+do, is not compiled again by a build that links either.
 None is kept either when the command has an input that cannot be followed: a thin archive, whose
 members are other files, a response file, a file list, a linker script that does more than name
-its inputs, a path that leaves the directory of the build, or an option for the linker that is
-not among those whose inputs are known (`program_link_inputs.v` lists them). The command of
-the linker is read in the order of the compiler's: an option takes the value that follows it,
-however the two were given (`-Wl,-rpath /dir`). The copy in the
+its inputs, or an option for the linker that is not among those whose inputs are known
+(`program_link_inputs.v` lists them). The command of the linker is read in the order of the
+compiler's: an option takes the value that follows it, however the two were given
+(`-Wl,-rpath /dir`). A relative path is one of the directory in which the command runs, which
+the build makes for itself; one that leaves that directory (`-L../libs`,
+`-fprofile-use=../default.profdata`) is followed like an absolute one. The copy in the
 cache is a file of its own: changing or removing the output changes nothing there, and an
 executable that is restored gets the permissions that the umask of the caller leaves, as a
 linked one does. Builds that leave more than an executable behind run in

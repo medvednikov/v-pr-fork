@@ -14954,16 +14954,26 @@ pub fn run(args []string) {
 					read_preprocessed_headers = false
 					linked = run_v3_tcc_executable_link(tcc_path, link_args, cc_dir, cc_out)
 				}
-				if program_link_inputs.taken && linked.exit_code == 0 {
-					if read_preprocessed_headers {
-						if v3_c_mentions_compile_time(generated_unit) {
-							prelude_inputs.mentions_time = true
-						}
-						program_link_inputs.add_header_inputs(&prelude_inputs)
+				if program_link_inputs.taken && linked.exit_code == 0
+					&& program_link_inputs.unknown.len == 0 {
+					unit := if read_preprocessed_headers {
+						generated_unit
 					} else {
-						program_link_inputs.add_compiled_headers(link_args, cc_dir, os.read_file(os.join_path_single(cc_dir,
-							tcc_source)) or { '' }, v3_tcc_include_search(tcc_path, v3_tcc_preprocess_args(tcc_args,
-							tcc_source), cc_dir), before_tcc)
+						os.read_file(os.join_path_single(cc_dir, tcc_source)) or { '' }
+					}
+					search := v3_tcc_include_search(&cache_state.manager, tcc_path, v3_tcc_preprocess_args(tcc_args,
+						tcc_source), cc_dir)
+					if read_preprocessed_headers {
+						// The headers are those of the preprocessed form. What the unit
+						// asks of the compiler after them is asked in every build.
+						program_link_inputs.add_header_inputs(&prelude_inputs)
+						rest := v3_header_inputs([]string{}, generated_unit[v3_tcc_prelude_end(generated_unit)..],
+							search, before_tcc)
+						program_link_inputs.add_header_inputs(&rest)
+					} else {
+						// TinyCC writes the headers of every source of a command down.
+						program_link_inputs.add_compiled_headers(&cache_state.manager, cc_dir,
+							unit, search, before_tcc)
 					}
 				}
 				linked
@@ -15051,7 +15061,12 @@ pub fn run(args []string) {
 				if effective_c_compiler == 'msvc' {
 					cc_args = msvc_cl_args(cc_args, prefs.normalized_target_os())
 				}
-				if program_executable_enabled && v3_compiled_sources(cc_args).len == 1 {
+				cc_sources := if program_executable_enabled {
+					v3_compiled_sources(cc_args)
+				} else {
+					[]string{}
+				}
+				if cc_sources.len == 1 {
 					// The compiler writes down the headers that it reads: they are
 					// inputs of the executable like the files of the link. It writes
 					// those of one source only.
@@ -15071,12 +15086,12 @@ pub fn run(args []string) {
 						}), cc_dir)
 				}
 				result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
-				if program_executable_enabled && result.exit_code == 0
-					&& v3_compiled_sources(cc_args).len > 0 {
+				// A command that links what earlier commands compiled reads no header.
+				if result.exit_code == 0 && cc_sources.len > 0
+					&& program_link_inputs.compiler_tells_its_headers(cc_sources) {
 					if search := v3_include_search(&cache_state.manager, c_compiler, cc_args, cc_dir) {
-						program_link_inputs.add_compiled_headers(cc_args, cc_dir, os.read_file(cc_src) or {
-							''
-						}, search, before_cc)
+						program_link_inputs.add_compiled_headers(&cache_state.manager, cc_dir,
+							os.read_file(cc_src) or { '' }, search, before_cc)
 					} else {
 						program_link_inputs.unknown = 'the compiler did not tell where it looks for headers'
 					}

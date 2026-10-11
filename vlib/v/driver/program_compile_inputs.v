@@ -268,22 +268,13 @@ fn (mut inputs V3ProgramLinkInputs) add_header_inputs(headers &V3HeaderInputs) {
 	}
 }
 
-// add_compiled_headers adds the headers that a C compiler read when it ran the
-// command `args` in `cc_dir`, which made it write them to
-// v3_program_dependency_file, or says why they are not known. `unit` is the C of
-// the program, `search` where the compiler looks for an included file, and
-// `before` a time, in seconds, from before the command started.
-fn (mut inputs V3ProgramLinkInputs) add_compiled_headers(args []string, cc_dir string, unit string, search V3IncludeSearch, before i64) {
+// add_compiled_headers adds the headers that a C compiler read when it ran a
+// command in `cc_dir`, which made it write them to v3_program_dependency_file, or
+// says why they are not known. `unit` is the C of the program, `search` where the
+// compiler looks for an included file, and `before` a time, in seconds, from
+// before the command started.
+fn (mut inputs V3ProgramLinkInputs) add_compiled_headers(manager &modulecache.Manager, cc_dir string, unit string, search V3IncludeSearch, before i64) {
 	if inputs.unknown.len > 0 {
-		return
-	}
-	sources := v3_compiled_sources(args)
-	if sources.len == 0 {
-		// The command links what earlier commands compiled.
-		return
-	}
-	if sources.len > 1 {
-		inputs.unknown = 'the command compiles more than one source: ${sources.join(' ')}'
 		return
 	}
 	text := os.read_file(os.join_path_single(cc_dir, v3_program_dependency_file)) or {
@@ -299,6 +290,17 @@ fn (mut inputs V3ProgramLinkInputs) add_compiled_headers(args []string, cc_dir s
 			read << path
 		}
 	}
-	headers := v3_header_inputs(read, unit, search, before)
+	headers := v3_kept_header_inputs(manager, read, unit, search, before)
 	inputs.add_header_inputs(&headers)
+}
+
+// v3_compiler_tells_its_headers reports whether a compiler driver that runs the
+// command `args` writes down every header that it reads when it is asked to: it
+// writes those of one source, so a command that compiles several is told by the
+// last of them only. `inputs` gets the reason when it does not.
+fn (mut inputs V3ProgramLinkInputs) compiler_tells_its_headers(sources []string) bool {
+	if sources.len > 1 && inputs.unknown.len == 0 {
+		inputs.unknown = 'the command compiles more than one source: ${sources.join(' ')}'
+	}
+	return sources.len == 1 && inputs.unknown.len == 0
 }

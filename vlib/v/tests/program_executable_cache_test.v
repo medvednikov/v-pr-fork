@@ -682,11 +682,13 @@ fn test_notices_of_a_program_built_from_cached_c_are_kept_with_its_executable() 
 // compiles the headers of the program and links whatever an earlier one kept, and
 // returns what the program prints.
 fn built_without_the_cached_executable(root string, flags []string, main_file string, name string) string {
+	saved := ['V3_CACHE_DISABLE_PROGRAM_EXECUTABLE', 'V3_TCC_NO_PRELUDE_CACHE'].map(save_env(it))
 	os.setenv('V3_CACHE_DISABLE_PROGRAM_EXECUTABLE', '1', true)
 	os.setenv('V3_TCC_NO_PRELUDE_CACHE', '1', true)
 	build(root, flags, main_file, name)
-	os.unsetenv('V3_CACHE_DISABLE_PROGRAM_EXECUTABLE')
-	os.unsetenv('V3_TCC_NO_PRELUDE_CACHE')
+	for env in saved {
+		env.restore()
+	}
 	return run_built(root, name)
 }
 

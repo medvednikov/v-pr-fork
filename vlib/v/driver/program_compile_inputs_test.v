@@ -79,8 +79,8 @@ const char *text = "#include \"in_a_string.h\"";
 #include MACRO_NAME
 #include "local.h"
 '
-	assert v3_quoted_include_names(source) == ['local.h', 'sub/other.h', 'next.h', 'objc.h',
-		'optional.h', 'later.h']
+	// What a file asks `__has_include` about is told by v3_has_include_names.
+	assert v3_quoted_include_names(source) == ['local.h', 'sub/other.h', 'next.h', 'objc.h']
 }
 
 fn test_include_names_of_a_framework_are_those_of_its_headers() {
@@ -161,6 +161,16 @@ fn test_header_inputs_are_the_files_read_and_the_places_where_another_would_be_r
 	}
 	respelled := v3_header_inputs([header], '', spelled, later)
 	assert os.join_path(first, 'sys') in respelled.missing
+	// A directory below one of the search can be a link to another place: the
+	// header is still one of that directory, by the name that the compiler gives it.
+	elsewhere := os.join_path(root, 'elsewhere')
+	os.mkdir_all(elsewhere)!
+	os.write_file(os.join_path(elsewhere, 'api.h'), 'int api;\n')!
+	os.symlink(elsewhere, os.join_path(third, 'pkg'))!
+	linked := v3_header_inputs([os.join_path(third, 'pkg', 'api.h')], '', search, later)
+	assert linked.unknown == ''
+	assert os.join_path(first, 'pkg') in linked.missing
+	assert os.join_path(second, 'pkg') in linked.missing
 
 	// A header of a time macro makes what is compiled a thing of the moment.
 	os.write_file(inner, 'static const char *built = __DATE__ " " __TIME__;\n')!
@@ -239,7 +249,7 @@ fn test_headers_that_a_compiler_read_are_inputs_of_its_executable() {
 	mut inputs := V3ProgramLinkInputs{
 		taken: true
 	}
-	inputs.add_compiled_headers(args, build_dir, unit, search, later)
+	inputs.add_compiled_headers(&manager, build_dir, unit, search, later)
 	assert inputs.unknown == ''
 	assert header in inputs.files
 	assert inputs.identities[inputs.files.index(header)] == modulecache.file_metadata_signature(header)
@@ -251,27 +261,52 @@ fn test_headers_that_a_compiler_read_are_inputs_of_its_executable() {
 		os.join_path(second, 'optional_answer.h'), absent] {
 		assert candidate in inputs.missing, candidate
 	}
+	// What the headers of a compilation make its inputs is kept: the next one that
+	// read the same files, each the file that it was, reads none of them again.
+	records := os.ls(manager.dir)!.filter(it.starts_with('header_inputs_'))
+	assert records.len == 1
+	mut again_inputs := V3ProgramLinkInputs{
+		taken: true
+	}
+	again_inputs.add_compiled_headers(&manager, build_dir, unit, search, later)
+	assert again_inputs.unknown == ''
+	assert again_inputs.files == inputs.files && again_inputs.identities == inputs.identities
+	assert again_inputs.missing == inputs.missing
+	assert os.ls(manager.dir)!.filter(it.starts_with('header_inputs_')) == records
+	// A unit that asks for the time is no other set of headers, and no executable
+	// is kept of it.
+	mut timed := V3ProgramLinkInputs{
+		taken: true
+	}
+	timed.add_compiled_headers(&manager, build_dir, unit + 'const char *t = __TIME__;\n',
+		search, later)
+	assert timed.unknown.contains('time of its compilation')
 	// A header that was written when the compiler had started may not be the one
-	// that it read.
+	// that it read, whatever is kept of it.
 	mut early := V3ProgramLinkInputs{
 		taken: true
 	}
-	early.add_compiled_headers(args, build_dir, unit, search, time.utc().unix() - 10)
+	early.add_compiled_headers(&manager, build_dir, unit, search, time.utc().unix() - 10)
 	assert early.unknown.len > 0
+	// A header that appears where it would be found first is no input that is kept.
+	os.mkdir_all(os.join_path(first, 'sub'))!
+	os.write_file(os.join_path(first, 'sub', 'answer.h'), 'static inline int answer(void) { return 42; }\n')!
+	mut shadowed := V3ProgramLinkInputs{
+		taken: true
+	}
+	shadowed.add_compiled_headers(&manager, build_dir, unit, search, time.utc().unix() - 10)
+	assert shadowed.unknown.len > 0
 	// More than one source: the compiler writes down the headers of the last one.
 	mut several := V3ProgramLinkInputs{
 		taken: true
 	}
-	several.add_compiled_headers(['-o', 'out', 'src.c', 'other.c'], build_dir, unit, search,
-		later)
+	assert !several.compiler_tells_its_headers(['src.c', 'other.c'])
 	assert several.unknown.contains('more than one source')
-	// A command that only links read no header.
-	mut linked := V3ProgramLinkInputs{
+	mut one := V3ProgramLinkInputs{
 		taken: true
 	}
-	linked.add_compiled_headers(['-o', 'out', '/cache/main.o'], build_dir, '', search,
-		later)
-	assert linked.unknown == '' && linked.files == []
+	assert one.compiler_tells_its_headers(['src.c'])
+	assert one.unknown == ''
 }
 
 fn test_an_executable_is_not_kept_of_a_compilation_that_cannot_be_repeated() {

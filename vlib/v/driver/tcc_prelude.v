@@ -161,8 +161,24 @@ fn v3_tcc_include_dirs(args []string) ([]string, []string, []string) {
 // v3_tcc_default_include_dirs returns the absolute directories that TinyCC searches
 // for an included file without being told to. Those that it gives relative to the
 // directory it runs in are below the directory of one build, where nothing is.
-fn v3_tcc_default_include_dirs(tcc_path string, tcc_args []string, cc_dir string) []string {
+// What it answers follows from the compiler, its `-B` and C_INCLUDE_PATH: the
+// answer is kept in the module cache for those.
+fn v3_tcc_default_include_dirs(manager &modulecache.Manager, tcc_path string, tcc_args []string, cc_dir string) []string {
 	mut args := tcc_args.filter(it.trim_space().starts_with('-B'))
+	record := os.join_path_single(manager.dir, 'tcc_include_dirs_${c_hash_bytes(u64(1469598103934665603), [
+		'v3-tcc-include-dirs-1',
+		os.real_path(tcc_path),
+		v3_cache_file_identity(tcc_path),
+		args.join('\n'),
+		os.getenv('C_INCLUDE_PATH'),
+	].join('\x00').bytes()).hex()}')
+	if manager.enabled {
+		if kept := os.read_file(record) {
+			if kept.ends_with('complete=1\n') {
+				return kept.split_into_lines().filter(it != 'complete=1')
+			}
+		}
+	}
 	args << '-print-search-dirs'
 	result := cmdexec.run_in(tcc_path, args, cc_dir)
 	mut dirs := []string{}
@@ -180,14 +196,18 @@ fn v3_tcc_default_include_dirs(tcc_path string, tcc_args []string, cc_dir string
 			dirs << dir
 		}
 	}
+	if manager.enabled && manager.ensure_dir() {
+		mut lines := dirs.clone()
+		lines << 'complete=1'
+		os.write_file(record, lines.join('\n') + '\n') or {}
+	}
 	return dirs
 }
 
 // v3_tcc_source_has_build_time_macros reports whether `source` spells a macro whose
 // value is that of the moment or of the place where it is expanded.
 fn v3_tcc_source_has_build_time_macros(source string) bool {
-	return source.contains('__DATE__') || source.contains('__TIME__')
-		|| source.contains('__TIMESTAMP__') || source.contains('__COUNTER__')
+	return v3_c_mentions_compile_time(source) || source.contains('__COUNTER__')
 }
 
 // v3_first_missing_path returns the shortest prefix of `path` below `root` that
@@ -320,13 +340,13 @@ fn v3_tcc_absolute_include_dirs(dirs []string, build_dir string) []string {
 // runs with `args` in `cc_dir`, in the order in which it searches: the directories
 // of `-I`, those of CPATH, those of `-isystem`, those of C_INCLUDE_PATH, its own
 // headers, and the ones of the system, which it tells when it is asked.
-fn v3_tcc_include_search(tcc_path string, args []string, cc_dir string) V3IncludeSearch {
+fn v3_tcc_include_search(manager &modulecache.Manager, tcc_path string, args []string, cc_dir string) V3IncludeSearch {
 	mut dirs, system_dirs, own_dirs := v3_tcc_include_dirs(args)
 	dirs << v3_environment_dirs('CPATH')
 	dirs << system_dirs
 	dirs << v3_environment_dirs('C_INCLUDE_PATH')
 	dirs << own_dirs
-	dirs << v3_tcc_default_include_dirs(tcc_path, args, cc_dir)
+	dirs << v3_tcc_default_include_dirs(manager, tcc_path, args, cc_dir)
 	return V3IncludeSearch{
 		dirs: v3_tcc_absolute_include_dirs(dirs, cc_dir)
 	}
@@ -544,15 +564,7 @@ fn v3_tcc_prelude_stamp(key string, inputs V3HeaderInputs, unusable string) ?str
 	if unusable.len > 0 {
 		out.writeln('unusable=${unusable.replace('\n', ' ')}')
 	}
-	if inputs.mentions_time {
-		out.writeln('mentions_time=1')
-	}
-	for i, path in inputs.files {
-		out.writeln('file=${path}\t${inputs.identities[i]}')
-	}
-	for path in inputs.missing {
-		out.writeln('missing=${path}')
-	}
+	out.write_string(v3_header_inputs_text(&inputs))
 	out.writeln('complete=1')
 	return out.str()
 }
@@ -577,18 +589,7 @@ fn v3_read_tcc_prelude_stamp(stamp string, key string) ?V3TccPreludeRecord {
 	for line in lines[2..lines.len - 1] {
 		if line.starts_with('unusable=') {
 			record.unusable = line['unusable='.len..]
-		} else if line == 'mentions_time=1' {
-			record.inputs.mentions_time = true
-		} else if line.starts_with('file=') {
-			tab := line.last_index_u8(`\t`)
-			if tab <= 'file='.len {
-				return none
-			}
-			record.inputs.files << line['file='.len..tab]
-			record.inputs.identities << line[tab + 1..]
-		} else if line.starts_with('missing=') {
-			record.inputs.missing << line['missing='.len..]
-		} else {
+		} else if !record.inputs.read_line(line) {
 			return none
 		}
 	}
@@ -611,13 +612,6 @@ fn v3_tcc_prelude_inputs_are_unchanged(inputs &V3HeaderInputs) bool {
 		}
 	}
 	return true
-}
-
-// v3_tcc_prelude_stamp_is_valid reports whether `stamp` is that of the prelude
-// `key`, with inputs that are what they were.
-fn v3_tcc_prelude_stamp_is_valid(stamp string, key string) bool {
-	record := v3_read_tcc_prelude_stamp(stamp, key) or { return false }
-	return v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 }
 
 fn v3_trace_tcc_prelude(message string) {
@@ -705,7 +699,7 @@ fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, 
 	}
 	preprocessed := os.read_file(output_file) or { return none }
 	read, of_the_build := v3_preprocessed_files(preprocessed, cc_dir)
-	inputs := v3_header_inputs(read, prelude, v3_tcc_include_search(tcc_path, preprocess_args,
+	inputs := v3_header_inputs(read, prelude, v3_tcc_include_search(manager, tcc_path, preprocess_args,
 		cc_dir), before_preprocessing)
 	mut form := v3_tcc_split_preprocessed(preprocessed)
 	if form.unusable.len == 0 && v3_tcc_source_has_build_time_macros(prelude) {
@@ -717,20 +711,25 @@ fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, 
 	if form.unusable.len == 0 {
 		// A compiler that reads the form must see the C that the preprocessor made
 		// of the prelude: so it does when the form comes out of the preprocessor as
-		// it went in. A run that fails says nothing of the form: the next build
-		// asks again.
+		// it went in. A form that TinyCC reports an error in is one that it cannot
+		// use.
 		os.write_file(tmp, form.text()) or { return none }
 		os.write_file(verify_file, '#include "${c_include_path(tmp)}"\n') or { return none }
 		mut verify_args := preprocess_args.clone()
 		verify_args << ['-E', '-dD', '-o', os.file_name(output_file), os.file_name(verify_file)]
 		verified := cmdexec.run_in(tcc_path, verify_args, cc_dir)
 		if verified.exit_code != 0 {
-			v3_trace_tcc_prelude('not verified: ${verified.output.all_before('\n')}')
-			return none
-		}
-		again := os.read_file(output_file) or { return none }
-		if !v3_tcc_preprocessed_forms_match(&form, v3_tcc_split_preprocessed(again)) {
-			form.unusable = 'its macros change the C that they expanded to'
+			if !verified.output.contains('error') {
+				// TinyCC did not run, or was stopped: the next build asks again.
+				v3_trace_tcc_prelude('not verified: ${verified.output.all_before('\n')}')
+				return none
+			}
+			form.unusable = 'TinyCC does not read its preprocessed form: ${verified.output.all_before('\n')}'
+		} else {
+			again := os.read_file(output_file) or { return none }
+			if !v3_tcc_preprocessed_forms_match(&form, v3_tcc_split_preprocessed(again)) {
+				form.unusable = 'its macros change the C that they expanded to'
+			}
 		}
 	}
 	stamp := v3_tcc_prelude_stamp(key, inputs, form.unusable) or {

@@ -1,7 +1,9 @@
 module driver
 
 import os
+import strings
 import v.modulecache
+import v.tempname
 
 // What a C compiler reads besides the unit that it compiles decides what it makes
 // of the unit: the preprocessed headers that TinyCC is given (tcc_prelude.v) and
@@ -42,59 +44,48 @@ fn v3_c_mentions_compile_time(text string) bool {
 	return text.contains('__DATE__') || text.contains('__TIME__') || text.contains('__TIMESTAMP__')
 }
 
-// v3_quoted_include_names returns the names that `source` includes, or asks
-// `__has_include` about, in quotation marks: the compiler looks for those in the
-// directory of the file that names them before it looks anywhere else.
+// v3_quoted_include_names returns the names that `source` includes in quotation
+// marks: the compiler looks for those in the directory of the file that names them
+// before it looks anywhere else. Only a line that starts with `#` is looked at.
 fn v3_quoted_include_names(source string) []string {
 	mut names := []string{}
 	mut pos := 0
 	for pos < source.len {
-		mut line_end := source.index_after_('\n', pos)
+		mut start := pos
+		for start < source.len && source[start] in [` `, `\t`] {
+			start++
+		}
+		mut line_end := source.index_after_('\n', start)
 		if line_end < 0 {
 			line_end = source.len
 		}
-		line := source[pos..line_end].trim_left(' \t')
 		pos = line_end + 1
-		if line.len < 2 || line[0] != `#` {
+		if start >= line_end || source[start] != `#` {
 			continue
 		}
-		directive := line[1..].trim_left(' \t')
-		mut rest := ''
-		for word in ['include_next', 'include', 'import'] {
-			if directive.starts_with(word) {
-				rest = directive[word.len..].trim_left(' \t')
-				break
+		// Most directives are no includes: `#if`, `#define`, `#endif`.
+		mut word := start + 1
+		for word < line_end && source[word] in [` `, `\t`] {
+			word++
+		}
+		if word + 1 >= line_end || source[word] != `i` || source[word + 1] !in [`n`, `m`] {
+			continue
+		}
+		line := source[start..line_end]
+		mut argument := v3_include_directive_argument(line) or { '' }
+		if argument.len == 0 {
+			// `#include_next` and the `#import` of Objective-C name a file as well.
+			directive := line[1..].trim_left(' \t')
+			for name in ['include_next', 'import'] {
+				if directive.starts_with(name) {
+					argument = directive[name.len..].trim_left(' \t')
+				}
 			}
 		}
-		if rest.len > 2 && rest[0] == `"` {
-			close := rest.index_after_('"', 1)
-			if close > 1 && rest[1..close] !in names {
-				names << rest[1..close]
-			}
-		}
-	}
-	mut found := 0
-	for {
-		found = source.index_after_('__has_include', found)
-		if found < 0 {
-			break
-		}
-		found += '__has_include'.len
-		mut open := found
-		if source[open..].starts_with('_next') {
-			open += '_next'.len
-		}
-		for open < source.len && source[open] in [` `, `\t`, `(`] {
-			open++
-		}
-		if open < source.len && source[open] == `"` {
-			mut close := open + 1
-			for close < source.len && source[close] != `"` && source[close] != `\n` {
-				close++
-			}
-			if close < source.len && source[close] == `"` && close > open + 1
-				&& source[open + 1..close] !in names {
-				names << source[open + 1..close]
+		if argument.len > 2 && argument[0] == `"` {
+			close := argument.index_after_('"', 1)
+			if close > 1 && argument[1..close] !in names {
+				names << argument[1..close]
 			}
 		}
 	}
@@ -191,7 +182,9 @@ fn v3_header_inputs(read []string, unit string, search V3IncludeSearch, before i
 	mut inputs := V3HeaderInputs{
 		mentions_time: v3_c_mentions_compile_time(unit)
 	}
-	// The compiler and its own answer can spell one directory in two ways.
+	// The compiler and its own answer can spell one directory in two ways, and a
+	// directory below one of the search can be a link to another place: a file is
+	// matched as the compiler names it, and as the file system does.
 	real_dirs := search.dirs.map(os.real_path(it))
 	framework_dirs := search.dirs.map(it in search.frameworks)
 	mut real_dir_of := map[string]string{}
@@ -206,15 +199,20 @@ fn v3_header_inputs(read []string, unit string, search V3IncludeSearch, before i
 		if !inputs.mentions_time && v3_c_mentions_compile_time(text) {
 			inputs.mentions_time = true
 		}
+		own_dir := os.dir(path)
+		mut beside := []string{}
 		if text.contains('__has_include') {
 			for name in v3_has_include_names(text) {
 				if name !in asked {
 					asked << name
 				}
+				beside << name
 			}
 		}
-		own_dir := os.dir(path)
-		for name in v3_quoted_include_names(text) {
+		if text.contains('"') {
+			beside << v3_quoted_include_names(text)
+		}
+		for name in beside {
 			if os.is_abs_path(name) {
 				continue
 			}
@@ -233,23 +231,37 @@ fn v3_header_inputs(read []string, unit string, search V3IncludeSearch, before i
 			resolved
 		}
 		real := os.join_path_single(real_dir, os.file_name(path))
-		for position, dir in real_dirs {
-			if !real.starts_with(dir + '/') {
-				continue
+		mut seen := map[string]bool{}
+		for position, dir in search.dirs {
+			mut below := []string{}
+			if path.starts_with(dir + '/') {
+				below << path[dir.len + 1..]
 			}
-			name := v3_include_name_below(real[dir.len + 1..], framework_dirs[position]) or {
-				continue
+			if real.starts_with(real_dirs[position] + '/') {
+				below << real[real_dirs[position].len + 1..]
 			}
-			for earlier in 0 .. position {
-				if real_dirs[earlier] == dir {
+			for relative_to_dir in below {
+				name := v3_include_name_below(relative_to_dir, framework_dirs[position]) or {
 					continue
 				}
-				relative := v3_include_path_below(name, framework_dirs[earlier]) or { continue }
-				absent := v3_first_missing_path(search.dirs[earlier], relative)
-				if absent.len > 0 {
-					missing[absent] = true
-				} else if !v3_path_is_older_than(search.dirs[earlier], relative, before) {
-					inputs.unknown = '`${os.join_path(search.dirs[earlier], relative)}` appeared while the compiler ran'
+				for earlier in 0 .. position {
+					if real_dirs[earlier] == real_dirs[position] {
+						continue
+					}
+					relative := v3_include_path_below(name, framework_dirs[earlier]) or {
+						continue
+					}
+					candidate := os.join_path(search.dirs[earlier], relative)
+					if seen[candidate] {
+						continue
+					}
+					seen[candidate] = true
+					absent := v3_first_missing_path(search.dirs[earlier], relative)
+					if absent.len > 0 {
+						missing[absent] = true
+					} else if !v3_path_is_older_than(search.dirs[earlier], relative, before) {
+						inputs.unknown = '`${candidate}` appeared while the compiler ran'
+					}
 				}
 			}
 		}
@@ -288,6 +300,115 @@ fn v3_header_inputs(read []string, unit string, search V3IncludeSearch, before i
 	for path in inputs.missing {
 		if path.contains_any('\n') && inputs.unknown.len == 0 {
 			inputs.unknown = '`${path}` cannot be recorded'
+		}
+	}
+	return inputs
+}
+
+// v3_header_inputs_text writes `inputs` down, a file or a missing path a line.
+fn v3_header_inputs_text(inputs &V3HeaderInputs) string {
+	mut out := strings.new_builder(64 + inputs.files.len * 128 + inputs.missing.len * 96)
+	if inputs.mentions_time {
+		out.writeln('mentions_time=1')
+	}
+	for i, path in inputs.files {
+		out.writeln('file=${path}\t${inputs.identities[i]}')
+	}
+	for path in inputs.missing {
+		out.writeln('missing=${path}')
+	}
+	return out.str()
+}
+
+// read_line takes one line of v3_header_inputs_text into `inputs`, and reports
+// whether it is one.
+fn (mut inputs V3HeaderInputs) read_line(line string) bool {
+	if line == 'mentions_time=1' {
+		inputs.mentions_time = true
+	} else if line.starts_with('file=') {
+		tab := line.last_index_u8(`\t`)
+		if tab <= 'file='.len {
+			return false
+		}
+		inputs.files << line['file='.len..tab]
+		inputs.identities << line[tab + 1..]
+	} else if line.starts_with('missing=') {
+		inputs.missing << line['missing='.len..]
+	} else {
+		return false
+	}
+	return true
+}
+
+// v3_kept_header_inputs is v3_header_inputs with a record in the module cache.
+// What the inputs of a compilation are follows from what its files hold, so a
+// compilation that read the files of an earlier one, each still the file that it
+// was and older than the compilation, with no file where none was, has the inputs
+// of that one: they are read back in place of every header.
+fn v3_kept_header_inputs(manager &modulecache.Manager, read []string, unit string, search V3IncludeSearch, before i64) V3HeaderInputs {
+	mut sorted := read.clone()
+	sorted.sort()
+	asked := v3_has_include_names(unit)
+	unit_mentions_time := v3_c_mentions_compile_time(unit)
+	key := c_hash_bytes(u64(1469598103934665603), ['v3-header-inputs-1', sorted.join('\n'),
+		search.dirs.join('\n'), search.frameworks.join('\n'), search.absent.join('\n'),
+		asked.join('\n')].join('\x00').bytes()).hex()
+	record := os.join_path_single(manager.dir, 'header_inputs_${key}_${sorted.len}')
+	if kept := os.read_file(record) {
+		if inputs := v3_header_inputs_of_record(kept, sorted, before) {
+			return V3HeaderInputs{
+				...inputs
+				mentions_time: inputs.mentions_time || unit_mentions_time
+			}
+		}
+	}
+	inputs := v3_header_inputs(sorted, unit, search, before)
+	// What a unit says of the time is no fact of its headers: the record is of a
+	// unit that says nothing of it.
+	if inputs.unknown.len == 0 && !unit_mentions_time && manager.ensure_dir() {
+		tmp := '${record}.tmp.${tempname.unique_token()}'
+		os.write_file(tmp, v3_header_inputs_text(&inputs) + 'complete=1\n') or {
+			os.rm(tmp) or {}
+			return inputs
+		}
+		os.mv(tmp, record) or { os.rm(tmp) or {} }
+	}
+	return inputs
+}
+
+// v3_header_inputs_of_record returns the inputs that `kept` records for a
+// compilation that read the files `read`, or none when the record is of other
+// files, when a file is not what it was or is as new as the compilation that
+// started at `before`, or when a file is where none was.
+fn v3_header_inputs_of_record(kept string, read []string, before i64) ?V3HeaderInputs {
+	lines := kept.split_into_lines()
+	if lines.len == 0 || lines.last() != 'complete=1' {
+		return none
+	}
+	mut inputs := V3HeaderInputs{}
+	for line in lines[..lines.len - 1] {
+		if !inputs.read_line(line) {
+			return none
+		}
+	}
+	mut recorded := map[string]bool{}
+	for path in inputs.files {
+		recorded[path] = true
+	}
+	for path in read {
+		if !recorded[path] {
+			return none
+		}
+	}
+	for i, path in inputs.files {
+		identity := v3_file_identity_from_before(path, before) or { return none }
+		if identity != inputs.identities[i] {
+			return none
+		}
+	}
+	for path in inputs.missing {
+		if os.exists(path) {
+			return none
 		}
 	}
 	return inputs

@@ -135,7 +135,6 @@ fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
 		assert false, 'a header with an identity can be recorded'
 		return
 	}
-	assert v3_tcc_prelude_stamp_is_valid(stamp, 'key')
 	record := v3_read_tcc_prelude_stamp(stamp, 'key') or {
 		assert false, 'the stamp is read back'
 		return
@@ -143,6 +142,7 @@ fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
 	assert record.unusable == '' && !record.inputs.mentions_time
 	assert record.inputs.files == [header] && record.inputs.identities == [identity]
 	assert record.inputs.missing == [absent]
+	assert v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 	// Why a preprocessed form cannot be used holds as long as the inputs do, and
 	// so does what the headers say of the time.
 	unusable := v3_tcc_prelude_stamp('key', V3HeaderInputs{
@@ -154,7 +154,6 @@ fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
 		assert false, 'a prelude that cannot be used can be recorded'
 		return
 	}
-	assert v3_tcc_prelude_stamp_is_valid(unusable, 'key')
 	unusable_record := v3_read_tcc_prelude_stamp(unusable, 'key') or {
 		assert false, 'the stamp is read back'
 		return
@@ -162,18 +161,18 @@ fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
 	assert unusable_record.unusable == 'its macros change the C'
 	assert unusable_record.inputs.mentions_time
 	assert unusable_record.inputs.files == [header]
-	assert !v3_tcc_prelude_stamp_is_valid(stamp, 'other key')
 	assert v3_read_tcc_prelude_stamp(stamp, 'other key') == none
-	assert !v3_tcc_prelude_stamp_is_valid(stamp.all_before_last('complete=1'), 'key')
+	assert v3_read_tcc_prelude_stamp(stamp.all_before_last('complete=1'), 'key') == none
+	assert v3_read_tcc_prelude_stamp(stamp.replace('missing=', 'unknown='), 'key') == none
 	// A header that appears where none was changes what an include finds.
 	os.write_file(absent, 'int b;\n')!
-	assert !v3_tcc_prelude_stamp_is_valid(stamp, 'key')
+	assert !v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 	os.rm(absent)!
-	assert v3_tcc_prelude_stamp_is_valid(stamp, 'key')
+	assert v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 	// So does a header that is another file than it was.
 	os.rm(header)!
 	os.write_file(header, 'long a;\n')!
-	assert !v3_tcc_prelude_stamp_is_valid(stamp, 'key')
+	assert !v3_tcc_prelude_inputs_are_unchanged(&record.inputs)
 }
 
 fn test_build_time_macros_keep_a_prelude_out_of_the_cache() {
@@ -269,8 +268,10 @@ fn test_include_directories_of_the_environment_come_after_those_of_the_command()
 	// C_INCLUDE_PATH and its own, in that order, and then those of the system.
 	os.setenv('CPATH', '/env/cpath', true)
 	os.setenv('C_INCLUDE_PATH', '/env/c_include', true)
-	search := v3_tcc_include_search('/nonexistent/tcc', ['-B/tcc/lib', '-isystem', '/sys', '-I/option'],
-		'/build/dir')
+	manager := modulecache.new_manager(os.join_path(os.vtmp_dir(), 'v3_driver_tcc_search_${os.getpid()}'),
+		'salt', false, '', '')
+	search := v3_tcc_include_search(&manager, '/nonexistent/tcc', ['-B/tcc/lib', '-isystem', '/sys',
+		'-I/option'], '/build/dir')
 	assert search.dirs == ['/option', '/env/cpath', '/sys', '/env/c_include', '/tcc/lib/include']
 	assert search.frameworks == []
 	assert search.absent == []
