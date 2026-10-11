@@ -10575,6 +10575,8 @@ In the console build command, you can use:
 
 Parallel C builds keep the signal-handler runtime and its saved signal actions in one unit.
 Module-cache builds keep that runtime in the program prefix; cached objects use its declarations.
+Exports in builds without a V `main` also share one guarded runtime initializer across
+cached modules, including the backtrace stubs used on musl systems.
 Native headers that cannot safely share state across units use a single compilation unit.
 
 To select C23 with a compiler that supports it, use
