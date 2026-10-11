@@ -166,6 +166,8 @@ time.parse_duration('1d') or { assert err.msg() == 'unknown unit "d" in duration
 
 `Duration.str()` is meant for display. For a minute or more it writes forms such as
 `1:30:00`, which are not duration strings, so `parse_duration` does not read them back.
+Negative durations retain a single minus sign even at the minimum `i64` value:
+`time.Duration(i64(-9223372036854775807) - 1).str()` returns `-2562047:47:16`.
 
 Another very useful feature of the `time` module is the stop watch,
 for when you want to measure short time periods, elapsed while you
