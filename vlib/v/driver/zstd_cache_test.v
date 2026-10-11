@@ -63,7 +63,8 @@ fn test_native_preprocessed_type_boundaries_and_config_overrides() {
 	for flags in [['-D', 'MBEDTLS_CONFIG_FILE="custom.h"'], ['-UMBEDTLS_CONFIG_FILE'],
 		['-include', 'custom.h'], ['-imacroscustom.h'], ['-Wp,-DPSA_WANT_ALG_SHA_256=1'],
 		['-fgnu89-inline'], ['-std=c89'], ['-std=gnu89'], ['--std=gnu89'], ['-ansi'],
-		['-std=iso9899:199409'], ['--std', 'gnu89']] {
+		['-std=iso9899:199409'], ['--std', 'gnu89'], ['-x', 'c++'], ['-xobjective-c++'], ['-xc++'],
+		['-x', 'assembler'], ['-x']] {
 		assert !v3_mbedtls_default_header_context(ast, flags)
 	}
 }
@@ -182,4 +183,37 @@ fn test_default_mbedtls_and_sibling_headers_have_tracked_preprocessing_context()
 	assert helper in closure.inputs['mbedtls']
 	custom := v3_preprocess_bundled_mbedtls_headers(&inputs, ast, prefs, ['-DMBEDTLS_CONFIG_FILE="custom.h"'], 'cc', true, '')
 	assert !custom.replicable
+	for language_flags in [['-x', 'c++'], ['-xobjective-c++'], ['-xc++']] {
+		mut flags := inputs.include_dirs.map('-I' + it)
+		flags << language_flags
+		assert !v3_preprocess_bundled_mbedtls_headers(&inputs, ast, prefs, flags, 'cc', true, '').replicable
+	}
+}
+
+fn test_mbedtls_preflight_preserves_objective_c_static_state() {
+	$if !macos {
+		return
+	}
+	root := @VEXEROOT
+	header := os.real_path(os.join_path(root, 'thirdparty', 'mbedtls', 'include', 'mbedtls', 'ctr_drbg.h'))
+	context := os.real_path(os.join_path(os.dir(@FILE), 'testdata', 'native_config', 'objective_c.h'))
+	inputs := cgen.CacheNativeInputs{
+		native_paths:  {
+			header:  true
+			context: true
+		}
+		include_dirs:  [os.join_path(root, 'thirdparty', 'mbedtls', 'include'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include', 'everest'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include', 'everest', 'kremlib')]
+		module_inputs: {
+			'mbedtls': [header, context]
+		}
+	}
+	ast := flat.FlatAst.new()
+	mut prefs := pref.new_preferences()
+	prefs.vroot = root
+	mut flags := inputs.include_dirs.map('-I' + it)
+	flags << ['-x', 'objective-c']
+	assert !v3_preprocess_bundled_mbedtls_headers(&inputs, ast, prefs, flags, 'cc', true, '').replicable
 }

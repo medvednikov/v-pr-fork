@@ -4511,7 +4511,13 @@ fn v3_is_bundled_mbedtls_header(path string, vroot string) bool {
 // Native configuration overrides require their original preprocessing context.
 // Keep those on the existing conservative fallback instead of guessing that context.
 fn v3_mbedtls_default_header_context(a &flat.FlatAst, flags []string) bool {
-	for flag in flags {
+	for i, flag in flags {
+		language := c_joined_source_language(flag.trim_space())
+		if (language.len > 0 && language !in ['c', 'objective-c', 'none'])
+			|| (flag.trim_space() == '-x' && (i + 1 == flags.len
+				|| flags[i + 1].trim_space() !in ['c', 'objective-c', 'none'])) {
+			return false
+		}
 		if flag.contains('MBEDTLS_') || flag.contains('PSA_') || flag.contains('-include')
 			|| flag.contains('imacros') || flag.starts_with('/FI')
 			|| flag in ['-fgnu89-inline', '-ansi', 'c89', 'gnu89', 'c90', 'gnu90', 'iso9899:1990',
@@ -4729,9 +4735,13 @@ fn v3_native_file_has_default_mbedtls_context(path string, include_dirs []string
 }
 
 fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, a &flat.FlatAst, prefs &pref.Preferences, flags []string, compiler string, compiler_explicit bool, cross_sysroot string) V3NativeInputExpansion {
-	if prefs.is_prod || prefs.is_shared || !v3_mbedtls_default_header_context(a, flags) {
+	if prefs.is_prod || prefs.is_shared || !v3_mbedtls_default_header_context(a, flags)
+		|| c_link_flags_use_cpp_language(flags) {
 		return V3NativeInputExpansion{}
 	}
+	language := cache_probe_language(cgen.cache_native_inputs_language(a, prefs.vroot,
+		flags, prefs.c99, prefs.ccompiler, prefs.target), flags)
+	if language !in ['c', 'objective-c'] { return V3NativeInputExpansion{} }
 	mut headers := map[string]bool{}
 	for path in native_inputs.native_paths.keys() {
 		if v3_is_bundled_mbedtls_header(path, prefs.vroot) { headers[path] = true }
@@ -4779,7 +4789,8 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 		return V3NativeInputExpansion{}
 	}
 	args << c_object_compile_flags(flags)
-	args << ['-x', 'c']
+	// Match the generated units, including Darwin's implicit Objective-C headers.
+	args << ['-x', language]
 	mut preprocess_args := args.clone()
 	preprocess_args << ['-E', '-P', source]
 	preprocessed := cmdexec.run(compiler, preprocess_args)
