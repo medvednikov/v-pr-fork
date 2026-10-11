@@ -86,7 +86,10 @@ fn test_default_mbedtls_and_sibling_headers_have_tracked_preprocessing_context()
 			header: true
 			helper: true
 		}
-		include_dirs:  [os.join_path(root, 'thirdparty', 'mbedtls', 'include')]
+		include_dirs:  [os.join_path(root, 'thirdparty', 'mbedtls', 'include'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include', 'everest'),
+			os.join_path(root, 'thirdparty', 'mbedtls', '3rdparty', 'everest', 'include', 'everest', 'kremlib')]
 		module_inputs: {
 			'mbedtls': [header, helper]
 		}
