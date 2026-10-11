@@ -128,3 +128,50 @@ fn test_single_element_parsing() ! {
 		}
 	}
 }
+
+fn test_parser_decodes_entities_in_text_and_attributes() {
+	doc := XMLDocument.from_string('<r a="&lt;&gt;&amp;&quot;&apos;">&lt;&gt;&amp;&quot;&apos;</r>')!
+	assert doc.root.attributes['a'] == '<>&"\''
+	assert doc.root.children == [XMLNodeContents('<>&"\'')]
+	assert XMLDocument.from_string(doc.str())!.root == doc.root
+}
+
+fn test_parser_decodes_numeric_character_references() {
+	doc := XMLDocument.from_string('<r a="&#65;&#x42;&#x1F600;">&#65;&#x42;&#128512;&#32;</r>')!
+	assert doc.root.attributes['a'] == 'AB😀'
+	assert doc.root.children == [XMLNodeContents('AB😀 ')]
+	space := XMLDocument.from_string('<r>&#32;<c/>&#x20;</r>')!
+	assert space.root.children == [XMLNodeContents(' '), XMLNode{ name: 'c' }, ' ']
+}
+
+fn test_parser_rejects_invalid_entity_references() {
+	for reference in ['&unknown;', '&amp', '&#0;', '&#xD800;', '&#xFFFE;', '&#x110000;',
+		'&#999999999999999999999;', '&#;', '&#x;', '&#-1;', '&#xG;', '&#1;'] {
+		for input in ['<r>${reference}</r>', '<r a="${reference}"/>'] {
+			if doc := XMLDocument.from_string(input) {
+				assert false, 'accepted ${input}: ${doc}'
+			} else {
+				assert err.msg().len > 0
+			}
+		}
+	}
+}
+
+fn test_parser_preserves_cdata_and_decodes_separate_text_runs() {
+	doc := XMLDocument.from_string('<r>a&amp;<!--c-->b&lt;<![CDATA[&amp;]]>c&gt;</r>')!
+	assert doc.root.children == [XMLNodeContents('a&'), XMLComment{ text: 'c' }, 'b<',
+		XMLCData{ text: '&amp;' }, 'c>']
+}
+
+fn test_validation_does_not_decode_entities_twice() {
+	doc := XMLDocument.from_string('<?xml version="1.0"?><!DOCTYPE r [<!ELEMENT r (#PCDATA)>]><r>&amp;amp;</r>')!
+	assert doc.root.children == [XMLNodeContents('&amp;')]
+	assert doc.validate()!.root == doc.root
+}
+
+fn test_parser_decodes_declared_entities() {
+	doc := XMLDocument.from_string('<?xml version="1.0"?><!DOCTYPE r [<!ENTITY warning "hello">]><r a="&warning;">&warning;</r>')!
+	assert doc.root.attributes['a'] == 'hello'
+	assert doc.root.children == [XMLNodeContents('hello')]
+	assert doc.validate()!.root == doc.root
+}

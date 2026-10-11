@@ -17,7 +17,7 @@ fn write_pretty_xml_node(mut builder strings.Builder, node XMLNode, original_ind
 		builder.write_u8(` `)
 		builder.write_string(key)
 		builder.write_string('="')
-		builder.write_string(value)
+		builder.write_string(escape_text(value))
 		builder.write_u8(`"`)
 	}
 	if node.children.len > 0 {

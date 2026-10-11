@@ -38,11 +38,14 @@ Check the `get_element...` methods defined on the XMLDocument struct.
 
 ### Escaping and Un-escaping XML Entities
 
-When the `validate` method is called, the XML document is parsed and all text
-nodes are un-escaped. This means that the text nodes will contain the actual
-text and not the escaped version of the text.
+Parsing decodes predefined entities, decimal and hexadecimal character references, and
+entities declared in the document's internal DTD in text and attribute values. Unknown entities
+and references to invalid XML characters produce an error. Numeric references to whitespace
+are preserved, including at the edges of text nodes. CDATA is left unchanged.
 
-When the XML document is serialized (using `str` or `pretty_str`), all text nodes are escaped.
+`validate` checks the parsed tree without decoding its text again.
+
+When the XML document is serialized (using `str` or `pretty_str`), text and attributes are escaped.
 
 The escaping and un-escaping can also be done manually using the `escape_text` and
 `unescape_text` methods.
