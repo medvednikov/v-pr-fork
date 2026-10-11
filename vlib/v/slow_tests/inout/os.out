@@ -1,5 +1,6 @@
 c_and_v_type_interoperability.md
 c_compiler_selection.md
+closure_sum_returns.md
 codelite.md
 compiler-fallback.md
 comptime-reflection-sources.md
