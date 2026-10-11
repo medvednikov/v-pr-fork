@@ -171,3 +171,23 @@ fn test_doctype_malformed_external_identifiers() {
 		}
 	}
 }
+
+fn test_duplicate_attributes_are_rejected() {
+	for input in ['<r a="1" a="2"/>', '<r a="1" a="2"></r>', '<r><child a="1" a="1"/></r>',
+		'<?xml version="1.0" version="1.0"?><r/>', '<r x:a="1" x:a="2"/>'] {
+		if doc := XMLDocument.from_string(input) {
+			assert false, 'accepted duplicate attribute: ${doc}'
+		} else {
+			assert err.msg().starts_with('Duplicate XML attribute: ')
+		}
+	}
+}
+
+fn test_attributes_remain_case_sensitive() {
+	doc := XMLDocument.from_string('<r a="1" A="2" x:a="3"/>')!
+	assert doc.root.attributes == {
+		'a':   '1'
+		'A':   '2'
+		'x:a': '3'
+	}
+}

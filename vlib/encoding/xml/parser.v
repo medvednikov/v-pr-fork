@@ -75,7 +75,11 @@ fn parse_attributes(attribute_contents string) !map[string]string {
 					`'`, `"` {
 						state = AttributeParserState.key
 						value_span.end = index
-						attributes[attribute_contents[key_span.start..key_span.end].trim_space()] = attribute_contents[value_span.start..value_span.end]
+						key := attribute_contents[key_span.start..key_span.end].trim_space()
+						if key in attributes {
+							return error('Duplicate XML attribute: ${key}')
+						}
+						attributes[key] = attribute_contents[value_span.start..value_span.end]
 
 						key_span.start = index + 1
 						key_span.end = index + 1
