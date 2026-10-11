@@ -4589,6 +4589,18 @@ fn v3_split_native_declaration_lines(source string) string {
 	return out.str()
 }
 
+// Only use this after preprocessing has resolved attribute macros. C11 SDK
+// helpers carry a pure optimization annotation that the literal scanner omits.
+// Preserve other attributes, including GNU inline's external-symbol semantics.
+fn v3_native_preprocessed_declarations_for_replication(source string) string {
+	mut declarations := v3_split_native_declaration_lines(source)
+	for annotation in ['__attribute__ ((__always_inline__))', '__attribute__((__always_inline__))',
+		'__attribute__ ((always_inline))', '__attribute__((always_inline))'] {
+		declarations = declarations.replace(annotation, '')
+	}
+	return declarations
+}
+
 // A sibling input can hide directives behind comments or macro continuations.
 // Type references and V's own helper include guards do not override configuration.
 fn v3_native_text_overrides_mbedtls(source string) bool {
@@ -4725,7 +4737,7 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 	mut preprocess_args := args.clone()
 	preprocess_args << ['-E', '-P', source]
 	preprocessed := cmdexec.run(compiler, preprocess_args)
-	if preprocessed.exit_code != 0 || !modulecache.c_source_is_replicable(v3_split_native_declaration_lines(preprocessed.output)) {
+	if preprocessed.exit_code != 0 || !modulecache.c_source_is_replicable(v3_native_preprocessed_declarations_for_replication(preprocessed.output)) {
 		return V3NativeInputExpansion{}
 	}
 	dependencies := c_object_dependencies(compiler, args, source)

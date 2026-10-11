@@ -56,6 +56,24 @@ fn test_native_config_override_logical_directives() {
 	assert !v3_mbedtls_default_header_context(&ast, [])
 }
 
+fn test_preprocessed_sdk_inline_annotation_preserves_replication_guards() {
+	helper := 'inline __attribute__ ((__always_inline__)) int helper(int value) { return value + 1; }'
+	assert !modulecache.c_source_is_replicable(helper)
+	assert modulecache.c_source_is_replicable(v3_native_preprocessed_declarations_for_replication(helper))
+	for source in ['extern ' + helper,
+		'inline __attribute__((gnu_inline)) int helper(int value) { return value; }',
+		'__inline__ __attribute__((__gnu_inline__)) int helper(int value) { return value; }',
+		'inline __attribute__((always_inline)) int helper(int value) { static int count; return count + value; }',
+		'__attribute__((always_inline)) int helper(int value) { return value; }',
+		'int counter __attribute__((aligned(16))) = 1;',
+		'static void (*callback)(void) __attribute__((used));'] {
+		assert !modulecache.c_source_is_replicable(v3_native_preprocessed_declarations_for_replication(source))
+	}
+	// Literal native closures still use the original conservative classifier.
+	alias := '#define GNU_INLINE gnu_inline\ninline __attribute__((GNU_INLINE)) int helper(int value) { return value + 1; }'
+	assert !modulecache.c_source_is_replicable(alias)
+}
+
 fn test_transitive_native_configuration_override_is_not_default() {
 	path := os.join_path(os.dir(@FILE), 'testdata', 'native_config', 'outer.h')
 	mut active := map[string]bool{}
