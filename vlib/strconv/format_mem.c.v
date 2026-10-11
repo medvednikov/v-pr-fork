@@ -391,76 +391,9 @@ pub fn format_fl(f f64, p BF_param) string {
 	}
 }
 
-// format_es returns a f64 as a `string` formatted according to the options set in `p`.
-@[direct_array_access; manualfree]
+// format_es formats the exact f64 value in scientific notation according to p, rounding half up.
 pub fn format_es(f f64, p BF_param) string {
-	unsafe {
-		// the sign is written from `p.positive`
-		mut fs := f64_to_str_pad(fabs(f), p.len1)
-		if p.rm_tail_zero {
-			tmp := fs
-			fs = remove_tail_zeros(fs)
-			tmp.free()
-		}
-
-		mut buf := [max_size_f64_char]u8{} // write temp float buffer in stack
-		mut out := [max_size_f64_char]u8{} // out buffer
-		mut buf_i := 0 // index temporary string
-		mut out_i := 0 // index output string
-
-		mut sign_len_diff := 0
-		if p.pad_ch == `0` {
-			if p.positive {
-				if p.sign_flag {
-					out[out_i] = `+`
-					out_i++
-					sign_len_diff = -1
-				}
-			} else {
-				out[out_i] = `-`
-				out_i++
-				sign_len_diff = -1
-			}
-		} else {
-			if p.positive {
-				if p.sign_flag {
-					buf[buf_i] = `+`
-					buf_i++
-				}
-			} else {
-				buf[buf_i] = `-`
-				buf_i++
-			}
-		}
-
-		// copy the float
-		vmemcpy(&buf[buf_i], fs.str, fs.len)
-		buf_i += fs.len
-
-		// make the padding if needed
-		dif := p.len0 - buf_i + sign_len_diff
-		if p.align == .right {
-			for i1 := 0; i1 < dif; i1++ {
-				out[out_i] = p.pad_ch
-				out_i++
-			}
-		}
-		vmemcpy(&out[out_i], &buf[0], buf_i)
-		out_i += buf_i
-		if p.align == .left {
-			for i1 := 0; i1 < dif; i1++ {
-				out[out_i] = p.pad_ch
-				out_i++
-			}
-		}
-		out[out_i] = 0
-
-		// return and free
-		tmp := fs
-		fs = tos_clone(&out[0])
-		tmp.free()
-		return fs
-	}
+	return format_float_magnitude(exact_float_scientific(fabs(f), p.len1), p)
 }
 
 // remove_tail_zeros strips trailing zeros from `s` and return the resulting `string`.
