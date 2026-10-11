@@ -4672,6 +4672,15 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 		if !v3_native_file_has_default_mbedtls_context(path, native_inputs.include_dirs, prefs.vroot, mut visited) {
 			return V3NativeInputExpansion{}
 		}
+		// The ordinary closure must also record every dependency seen by the
+		// logical guard, including comment-prefixed and spliced includes.
+		mut active := map[string]bool{}
+		mut expanded_paths := map[string]bool{}
+		_, complete := v3_expand_shipped_native_file(path, native_inputs.include_dirs,
+			prefs.vroot, true, mut active, mut expanded_paths)
+		if !complete || visited.keys().any(!expanded_paths[it]) {
+			return V3NativeInputExpansion{}
+		}
 	}
 
 	mut paths := headers.keys()
