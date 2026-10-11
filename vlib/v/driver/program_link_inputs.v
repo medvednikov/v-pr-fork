@@ -23,6 +23,17 @@ mut:
 	missing []string
 	// Why the inputs of the command cannot all be told, or '' when they can.
 	unknown string
+	// An option of the linker that is not known, or '': what it makes the linker
+	// read is not known from the command, and is when the linker tells it itself.
+	unknown_option string
+}
+
+// reason returns why no executable can be kept of a link with these inputs, or ''.
+fn (inputs &V3ProgramLinkInputs) reason() string {
+	if inputs.unknown.len > 0 {
+		return inputs.unknown
+	}
+	return inputs.unknown_option
 }
 
 // V3LinkCommand is the part of a link command that names files and libraries.
@@ -38,8 +49,9 @@ mut:
 	framework_dirs []string
 	frameworks     []string
 	// The directory in which the command runs, or '' when it is not known.
-	build_dir string
-	unknown   string
+	build_dir      string
+	unknown        string
+	unknown_option string
 }
 
 // v3_compiler_options_with_value are the options of a C compiler driver whose next
@@ -479,7 +491,7 @@ fn (mut c V3LinkCommand) add_linker_arguments(linker_args []V3LinkerArgument) {
 		if taken := c.add_linker_option(name, value, has_value, linker_args[i..]) {
 			i += taken
 		} else if !c.add_attached_linker_option(arg) && argument.forwarded {
-			c.unknown = 'the linker option `${arg}` is not one whose inputs are known'
+			c.unknown_option = 'the linker option `${arg}` is not one whose inputs are known'
 		}
 	}
 }
@@ -767,10 +779,11 @@ fn v3_program_link_inputs(args []string, linker_dir string, default_library_dirs
 		command.unknown = 'the linker scripts of the command name each other without end'
 	}
 	mut inputs := V3ProgramLinkInputs{
-		taken:   true
-		files:   files.keys()
-		missing: missing.keys()
-		unknown: command.unknown
+		taken:          true
+		files:          files.keys()
+		missing:        missing.keys()
+		unknown:        command.unknown
+		unknown_option: command.unknown_option
 	}
 	inputs.files.sort()
 	inputs.missing.sort()
@@ -915,4 +928,183 @@ fn v3_run_in_c_locale(program string, args []string, work_folder string) os.Resu
 		'LC_ALL':   'C'
 		'LANGUAGE': 'C'
 	})
+}
+
+// A linker can tell what it read: every file, and with Apple's linker every path
+// where it looked for one in vain. That is the link itself, and not what the
+// command seems to ask for, so it holds the libraries and the start files that a
+// compiler driver adds by itself, and whatever an option that is not known here
+// makes the linker read.
+
+// v3_linker_report_file is where the linker writes what it read, in the directory
+// of the build.
+const v3_linker_report_file = 'v3_program_link.report'
+
+// V3LinkerReport is the kind of account that a linker gives of its inputs.
+enum V3LinkerReport {
+	// It gives none that is known here.
+	no_report
+	// `-dependency_info` of Apple's linker and of LLD for Mach-O: the files that it
+	// read and the paths where it found none.
+	dependency_info
+	// `--dependency-file` of GNU ld, gold, LLD and mold: the files that it read, as
+	// a rule of `make`.
+	dependency_file
+}
+
+// v3_linker_report_args returns the arguments that make the linker of a compiler
+// driver write its report to v3_linker_report_file in `cc_dir`.
+fn v3_linker_report_args(report V3LinkerReport, cc_dir string) []string {
+	path := os.join_path_single(cc_dir, v3_linker_report_file)
+	return match report {
+		.no_report { []string{} }
+		.dependency_info { ['-Wl,-dependency_info,${path}'] }
+		.dependency_file { ['-Wl,--dependency-file=${path}'] }
+	}
+}
+
+// v3_linker_report tells which report the linker of `compiler` gives when it runs
+// with `search_args`, the arguments that choose a linker and its libraries. It
+// finds out by linking an empty program in `cc_dir`, once for a module cache: the
+// answer is kept there. A linker that does not know the option says so, and that
+// is kept as well; a link that fails for another reason is asked again.
+fn v3_linker_report(manager &modulecache.Manager, compiler string, search_args []string, target_os string, cc_dir string) V3LinkerReport {
+	candidate := if target_os == 'macos' {
+		V3LinkerReport.dependency_info
+	} else {
+		V3LinkerReport.dependency_file
+	}
+	record := os.join_path_single(manager.dir, 'linker_report_${c_hash_bytes(u64(1469598103934665603), [
+		'v3-linker-report-1',
+		os.real_path(compiler),
+		v3_cache_file_identity(compiler),
+		target_os,
+		search_args.join('\n'),
+	].join('\x00').bytes()).hex()}')
+	if kept := os.read_file(record) {
+		if kept == 'yes\n' {
+			return candidate
+		}
+		if kept == 'no\n' {
+			return .no_report
+		}
+	}
+	source := os.join_path_single(cc_dir, 'v3_link_probe.c')
+	output := os.join_path_single(cc_dir, 'v3_link_probe.out')
+	report := os.join_path_single(cc_dir, v3_linker_report_file)
+	defer {
+		os.rm(source) or {}
+		os.rm(output) or {}
+		os.rm(report) or {}
+	}
+	os.write_file(source, 'int main(void) { return 0; }\n') or { return .no_report }
+	mut args := search_args.clone()
+	args << v3_linker_report_args(candidate, cc_dir)
+	args << ['-o', os.file_name(output), os.file_name(source)]
+	result := v3_run_in_c_locale(compiler, args, cc_dir)
+	mut answer := ''
+	if result.exit_code == 0 && os.file_size(report) > 0 {
+		answer = 'yes\n'
+	} else if result.output.contains('dependency') {
+		// The linker names the option that it does not know.
+		answer = 'no\n'
+	}
+	if answer.len > 0 && manager.ensure_dir() {
+		os.write_file(record, answer) or {}
+	}
+	return if answer == 'yes\n' { candidate } else { V3LinkerReport.no_report }
+}
+
+// v3_read_linker_report returns the files that a linker read and the paths where
+// it found none, from the report that it wrote to `path`, or none when there is no
+// report to read.
+fn v3_read_linker_report(report V3LinkerReport, path string) ?([]string, []string) {
+	mut found := []string{}
+	mut not_found := []string{}
+	match report {
+		.no_report {
+			return none
+		}
+		.dependency_file {
+			text := os.read_file(path) or { return none }
+			found = v3_parse_dependency_file(text)
+		}
+		.dependency_info {
+			// A record is a byte that tells its kind and a path that ends with a
+			// zero byte: 0x10 a file that was read, 0x11 a path where none was, 0x40
+			// the output, 0x00 the version of the linker.
+			bytes := os.read_bytes(path) or { return none }
+			mut i := 0
+			for i < bytes.len {
+				kind := bytes[i]
+				mut end := i + 1
+				for end < bytes.len && bytes[end] != 0 {
+					end++
+				}
+				if end >= bytes.len {
+					return none
+				}
+				name := bytes[i + 1..end].bytestr()
+				i = end + 1
+				if kind == 0x10 && name !in found {
+					found << name
+				} else if kind == 0x11 && name !in not_found {
+					not_found << name
+				}
+			}
+		}
+	}
+	if found.len == 0 {
+		return none
+	}
+	return found, not_found
+}
+
+// add_linker_report adds what the linker says that it read to the inputs of the
+// executable, from the report in `cc_dir`. A file that the command names has the
+// metadata that it had before the link; one that the linker found by itself gets
+// the metadata that it has now, and must be older than `before`, a time in
+// seconds from before the command started. What is no longer there was made and
+// removed by the command. A report that tells where the linker found nothing is
+// the whole of the link: an option that is not known here is no reason to keep no
+// executable then.
+fn (mut inputs V3ProgramLinkInputs) add_linker_report(report V3LinkerReport, cc_dir string, before i64) {
+	if report == .no_report || inputs.unknown.len > 0 {
+		return
+	}
+	found, not_found := v3_read_linker_report(report, os.join_path_single(cc_dir, v3_linker_report_file)) or {
+		inputs.unknown = 'the linker did not tell what it read'
+		return
+	}
+	mut known := map[string]bool{}
+	for path in inputs.files {
+		known[path] = true
+	}
+	for path in found {
+		if known[path] || !os.is_abs_path(path) || path.starts_with(cc_dir + '/')
+			|| !os.exists(path) {
+			continue
+		}
+		known[path] = true
+		identity := v3_file_identity_from_before(path, before) or {
+			inputs.unknown = '`${path}` cannot be told apart from a changed file'
+			return
+		}
+		inputs.files << path
+		inputs.identities << identity
+	}
+	mut absent := map[string]bool{}
+	for path in inputs.missing {
+		absent[path] = true
+	}
+	for path in not_found {
+		if absent[path] || !os.is_abs_path(path) || path.contains_any('\n') {
+			continue
+		}
+		absent[path] = true
+		inputs.missing << path
+	}
+	if report == .dependency_info {
+		inputs.unknown_option = ''
+	}
 }

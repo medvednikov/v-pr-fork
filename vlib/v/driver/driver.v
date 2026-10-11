@@ -4333,9 +4333,9 @@ fn v3_path_is_link_input(path string) bool {
 // what the link read, as it was before the link started. See
 // modulecache.Manager.valid_program_executable.
 fn publish_v3_program_executable(manager &modulecache.Manager, input V3CgenCacheInput, link_signature string, link &V3ProgramLinkInputs, bin_file string, diagnostics []V3CachedTypeDiagnostic) {
-	if link.unknown.len > 0 {
+	if link.reason().len > 0 {
 		if os.getenv('V3_CACHE_TRACE') != '' {
-			eprintln('  V3 program executable not cached: ${link.unknown}')
+			eprintln('  V3 program executable not cached: ${link.reason()}')
 		}
 		return
 	}
@@ -14955,7 +14955,7 @@ pub fn run(args []string) {
 					linked = run_v3_tcc_executable_link(tcc_path, link_args, cc_dir, cc_out)
 				}
 				if program_link_inputs.taken && linked.exit_code == 0
-					&& program_link_inputs.unknown.len == 0 {
+					&& program_link_inputs.reason().len == 0 {
 					unit := if read_preprocessed_headers {
 						generated_unit
 					} else {
@@ -15072,6 +15072,14 @@ pub fn run(args []string) {
 					// those of one source only.
 					cc_args << ['-MD', '-MF', v3_program_dependency_file]
 				}
+				// The linker tells what it read, where it can.
+				linker_report := if program_executable_enabled && !is_o && !is_shared {
+					v3_linker_report(&cache_state.manager, c_compiler, v3_link_search_args(cc_args),
+						prefs.normalized_target_os(), cc_dir)
+				} else {
+					V3LinkerReport.no_report
+				}
+				cc_args << v3_linker_report_args(linker_report, cc_dir)
 				if verbose || show_cc {
 					println('  > ${cmdexec.display(c_compiler, cc_args)}')
 				}
@@ -15086,6 +15094,9 @@ pub fn run(args []string) {
 						}), cc_dir)
 				}
 				result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
+				if result.exit_code == 0 && program_link_inputs.taken {
+					program_link_inputs.add_linker_report(linker_report, cc_dir, before_cc)
+				}
 				// A command that links what earlier commands compiled reads no header.
 				if result.exit_code == 0 && cc_sources.len > 0
 					&& program_link_inputs.compiler_tells_its_headers(cc_sources) {

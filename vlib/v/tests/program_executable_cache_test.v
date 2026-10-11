@@ -502,6 +502,21 @@ fn test_libraries_of_the_link_are_inputs_of_the_executable() {
 	assert run_built(root, 'forwarded_replaced') == '72'
 	assert_restored(build(root, with_forwarded, main_file, 'forwarded_again'))
 
+	// An option of the linker that the driver has no word of: Apple's linker tells
+	// every file that it read and every place where it found none, so an
+	// executable is kept of such a link, and follows its library.
+	$if macos {
+		mut with_unlisted := answer_flags.clone()
+		with_unlisted << ['-ldflags', '-Wl,-no_order_inits -L${os.dir(forwarded)} -lanswer']
+		assert_rebuilt(build(root, with_unlisted, main_file, 'unlisted'))
+		assert run_built(root, 'unlisted') == '72'
+		assert_restored(build(root, with_unlisted, main_file, 'unlisted_same'))
+		make_answer_library(forwarded, 73, false)
+		unlisted_replaced := build(root, with_unlisted, main_file, 'unlisted_replaced')
+		assert !restored(unlisted_replaced), unlisted_replaced
+		assert run_built(root, 'unlisted_replaced') == '73'
+	}
+
 	// The same command links another library when the environment sends the
 	// linker to another directory, though no file is another one than it was.
 	env_first := os.join_path(root, 'env_first_libraries')

@@ -1,6 +1,7 @@
 module driver
 
 import os
+import time
 import v.modulecache
 
 fn link_inputs_fixture(name string) string {
@@ -164,7 +165,11 @@ fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
 	] {
 		mut command := ['-o', 'out', 'src.c']
 		command << args
-		assert v3_program_link_inputs(command, '', []string{}, '').unknown.len > 0, args.str()
+		unknown := v3_program_link_inputs(command, '', []string{}, '')
+		assert unknown.reason().len > 0, args.str()
+		// What an option of the linker reads is known when the linker tells it; the
+		// arguments of a file are those of the compiler as well.
+		assert (unknown.unknown_option.len > 0) == !args[0].contains('@'), args.str()
 	}
 	// The options of the compiler itself are many, and none of them is the linker's.
 	assert v3_program_link_inputs(['-O2', '-fwrapv', '--no-such-option', '-o', 'out', 'src.c'],
@@ -364,6 +369,190 @@ fn test_link_search_args_are_those_that_move_the_libraries_of_a_compiler() {
 		'-target',
 		'x86_64-linux-gnu',
 	]
+}
+
+fn test_linker_report_is_read_in_both_of_its_forms() {
+	root := link_inputs_fixture('linker_report_forms')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	info := os.join_path(root, 'dependency_info')
+	mut bytes := []u8{}
+	for kind, name in {
+		u8(0x00): '@(#)PROGRAM:ld PROJECT:ld-1267'
+		u8(0x10): '/sdk/usr/lib/libSystem.tbd'
+		u8(0x11): '/first/libanswer.a'
+		u8(0x40): 'out'
+	} {
+		bytes << kind
+		bytes << name.bytes()
+		bytes << 0
+	}
+	bytes << u8(0x10)
+	bytes << '/libs/libanswer.a'.bytes()
+	bytes << 0
+	bytes << u8(0x10)
+	bytes << '/sdk/usr/lib/libSystem.tbd'.bytes()
+	bytes << 0
+	os.write_bytes(info, bytes)!
+	found, not_found := v3_read_linker_report(.dependency_info, info) or {
+		assert false, 'the report of Apple ld is not read'
+		return
+	}
+	assert found == ['/sdk/usr/lib/libSystem.tbd', '/libs/libanswer.a']
+	assert not_found == ['/first/libanswer.a']
+	// A report that is cut off, or that is not there, is none.
+	os.write_bytes(info, bytes[..bytes.len - 3])!
+	assert v3_read_linker_report(.dependency_info, info) == none
+	assert v3_read_linker_report(.dependency_info, info + '.absent') == none
+	assert v3_read_linker_report(.no_report, info) == none
+	rule := os.join_path(root, 'dependency_file')
+	os.write_file(rule, 'out: /usr/lib/crt1.o /tmp/cc1.o \\\n /libs/libanswer.a /usr/lib/libc.so\n\n/usr/lib/crt1.o:\n\n/tmp/cc1.o:\n')!
+	read, none_missing := v3_read_linker_report(.dependency_file, rule) or {
+		assert false, 'the report of GNU ld is not read'
+		return
+	}
+	assert read == ['/usr/lib/crt1.o', '/tmp/cc1.o', '/libs/libanswer.a', '/usr/lib/libc.so']
+	assert none_missing == []
+	assert v3_linker_report_args(.dependency_info, '/build') == [
+		'-Wl,-dependency_info,/build/${v3_linker_report_file}',
+	]
+	assert v3_linker_report_args(.dependency_file, '/build') == [
+		'-Wl,--dependency-file=/build/${v3_linker_report_file}',
+	]
+	assert v3_linker_report_args(.no_report, '/build') == []
+	// The arguments that ask for the report name no input themselves.
+	for report in [V3LinkerReport.dependency_info, .dependency_file] {
+		mut command := ['-o', 'out', 'src.c']
+		command << v3_linker_report_args(report, '/build')
+		asked := v3_program_link_inputs(command, '', []string{}, '/build')
+		assert asked.reason() == ''
+		assert asked.files == []
+	}
+}
+
+fn test_linker_report_adds_what_the_linker_found_by_itself() {
+	root := link_inputs_fixture('linker_report_inputs')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	build_dir := os.join_path(root, 'build')
+	os.mkdir_all(build_dir)!
+	named := os.join_path(root, 'libnamed.a')
+	implicit := os.join_path(root, 'libimplicit.tbd')
+	made := os.join_path(build_dir, 'src.o')
+	gone := os.join_path(root, 'temporary.o')
+	absent := os.join_path(root, 'first', 'libnamed.a')
+	for file in [named, implicit, made] {
+		os.write_file(file, '!<arch>\nx')!
+	}
+	if modulecache.file_metadata_signature(named) == '' {
+		// This file system cannot tell a later edit apart: nothing is kept for it.
+		return
+	}
+	write_report := fn [build_dir] (found []string, not_found []string) {
+		mut bytes := []u8{}
+		for name in found {
+			bytes << u8(0x10)
+			bytes << name.bytes()
+			bytes << 0
+		}
+		for name in not_found {
+			bytes << u8(0x11)
+			bytes << name.bytes()
+			bytes << 0
+		}
+		os.write_bytes(os.join_path(build_dir, v3_linker_report_file), bytes) or { panic(err) }
+	}
+	write_report([named, implicit, made, gone, 'relative.o'], [absent])
+	later := time.utc().unix() + 10
+	new_inputs := fn [named] () V3ProgramLinkInputs {
+		return V3ProgramLinkInputs{
+			taken:          true
+			files:          [named]
+			identities:     ['identity from before the link']
+			unknown_option: 'the linker option `-no_order_inits` is not one whose inputs are known'
+		}
+	}
+	mut inputs := new_inputs()
+	inputs.add_linker_report(.dependency_info, build_dir, later)
+	assert inputs.unknown == ''
+	// The linker told where it found nothing: the option that is not known here
+	// read nothing that the report does not hold.
+	assert inputs.unknown_option == ''
+	assert inputs.reason() == ''
+	// A file that the command names keeps what it was before the link; one that
+	// the linker found by itself is the file that it is now; what the command made
+	// or removed is no input.
+	assert inputs.files == [named, implicit]
+	assert inputs.identities == ['identity from before the link',
+		modulecache.file_metadata_signature(implicit)]
+	assert inputs.missing == [absent]
+	// A rule of `make` tells no path where nothing was: what the option reads
+	// besides is not known.
+	os.write_file(os.join_path(build_dir, v3_linker_report_file), 'out: ${named} ${implicit}\n')!
+	mut ruled := new_inputs()
+	ruled.add_linker_report(.dependency_file, build_dir, later)
+	assert ruled.unknown == ''
+	assert ruled.files == [named, implicit]
+	assert ruled.unknown_option.len > 0
+	// A file that the linker found and that is as new as the link may not be the
+	// one that it read.
+	write_report([named, implicit], []string{})
+	mut early := new_inputs()
+	early.add_linker_report(.dependency_info, build_dir, time.utc().unix() - 10)
+	assert early.unknown.contains('libimplicit.tbd')
+	// A linker that was asked and wrote nothing leaves no executable behind.
+	os.rm(os.join_path(build_dir, v3_linker_report_file))!
+	mut silent := new_inputs()
+	silent.add_linker_report(.dependency_info, build_dir, later)
+	assert silent.unknown.contains('did not tell')
+	mut unasked := new_inputs()
+	unasked.add_linker_report(.no_report, build_dir, later)
+	assert unasked.unknown == '' && unasked.unknown_option.len > 0
+}
+
+fn test_linker_is_asked_once_which_report_it_gives() {
+	$if windows {
+		return
+	}
+	compiler := os.find_abs_path_of_executable('cc') or { return }
+	root := link_inputs_fixture('linker_report_probe')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	build_dir := os.join_path(root, 'build')
+	os.mkdir_all(build_dir)!
+	manager := modulecache.new_manager(os.join_path(root, 'cache'), 'salt', true, '', '')
+	report := v3_linker_report(&manager, compiler, []string{}, os.user_os(), build_dir)
+	$if macos {
+		assert report == .dependency_info
+	}
+	records := os.ls(manager.dir)!.filter(it.starts_with('linker_report_'))
+	// Nothing of the question is left in the directory of the build.
+	assert os.ls(build_dir)! == []
+	if report != .no_report {
+		assert records.len == 1
+		assert os.read_file(os.join_path(manager.dir, records[0]))! == 'yes\n'
+		// The answer is read back: a compiler that is not there is not run.
+		os.rmdir_all(build_dir)!
+		os.mkdir_all(build_dir)!
+		assert v3_linker_report(&manager, compiler, []string{}, os.user_os(), build_dir) == report
+	}
+	// A linker that does not know the option says so, and is not asked again; a
+	// compiler that fails for another reason is.
+	refusing := os.join_path(root, 'refusing-cc')
+	os.write_file(refusing, '#!/bin/sh\necho "ld: unknown options: -dependency_info --dependency-file" >&2\nexit 1\n')!
+	os.chmod(refusing, 0o755)!
+	assert v3_linker_report(&manager, refusing, []string{}, os.user_os(), build_dir) == .no_report
+	failing := os.join_path(root, 'failing-cc')
+	os.write_file(failing, '#!/bin/sh\necho "cc: no space left on device" >&2\nexit 1\n')!
+	os.chmod(failing, 0o755)!
+	assert v3_linker_report(&manager, failing, []string{}, os.user_os(), build_dir) == .no_report
+	kept := os.ls(manager.dir)!.filter(it.starts_with('linker_report_')).map(os.read_file(os.join_path(manager.dir,
+		it)) or { '' })
+	assert kept.filter(it == 'no\n').len == 1
+	assert kept.len == records.len + 1
 }
 
 fn test_library_search_dirs_are_read_from_what_a_compiler_prints() {

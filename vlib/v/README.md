@@ -576,7 +576,13 @@ do, is not compiled again by a build that links either.
 None is kept either when the command has an input that cannot be followed: a thin archive, whose
 members are other files, a response file, a file list, a linker script that does more than name
 its inputs, or an option for the linker that is not among those whose inputs are known
-(`program_link_inputs.v` lists them). The command of the linker is read in the order of the
+(`program_link_inputs.v` lists them). Where the linker can tell what it read, its own account
+is added to what the command shows: `-dependency_info` of Apple's linker, `--dependency-file`
+of GNU ld, gold, LLD and mold, found out once for a module cache by linking an empty program.
+The libraries and start files that a compiler driver adds by itself (`libc`, `libgcc`,
+`crt1.o`, `libSystem`) are inputs then. Apple's linker also tells every path where it looked
+for a file in vain, which is the whole of the link: an option that is not known is no reason
+to keep no executable there. The command of the linker is read in the order of the
 compiler's: an option takes the value that follows it, however the two were given
 (`-Wl,-rpath /dir`). A relative path is one of the directory in which the command runs, which
 the build makes for itself; one that leaves that directory (`-L../libs`,
