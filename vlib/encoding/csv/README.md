@@ -21,9 +21,9 @@ It prints:
 Unquoted fields cannot contain double quotes. Enclose a field containing quotes in double
 quotes and escape each embedded quote by doubling it; `read()` returns an error for a bare quote.
 
-The final record does not need a trailing line ending, including when the document contains
-only one record. Empty documents and comment-only input contain no records.
-
 The writer preserves carriage returns and line feeds inside quoted fields by default. With
 `use_crlf: true`, it drops carriage returns and writes each line feed as CRLF, matching the
 record terminator. The reader normalizes CRLF to LF inside quoted fields.
+
+The final record does not need a trailing line ending, including when the document contains
+only one record. Empty documents and comment-only input contain no records.
