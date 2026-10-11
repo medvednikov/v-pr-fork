@@ -4649,6 +4649,7 @@ fn v3_native_file_has_default_mbedtls_context(path string, include_dirs []string
 	real_path := os.real_path(path)
 	if visited[real_path] { return true }
 	visited[real_path] = true
+	if v3_is_bundled_mbedtls_header(real_path, vroot) { return true }
 	source := os.read_file(real_path) or { return false }
 	if v3_native_text_overrides_mbedtls(source) { return false }
 	for line in v3_native_directive_text(source).split_into_lines() {
@@ -4683,10 +4684,14 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 		// logical guard, including comment-prefixed and spliced includes.
 		mut active := map[string]bool{}
 		mut expanded_paths := map[string]bool{}
-		_, complete := v3_expand_shipped_native_file(path, native_inputs.include_dirs,
+		v3_expand_shipped_native_file(path, native_inputs.include_dirs,
 			prefs.vroot, true, mut active, mut expanded_paths)
-		if !complete || visited.keys().any(!expanded_paths[it]) {
-			return V3NativeInputExpansion{}
+		for dependency in visited.keys() {
+			if v3_is_bundled_mbedtls_header(dependency, prefs.vroot) {
+				headers[dependency] = true
+			} else if !expanded_paths[dependency] {
+				return V3NativeInputExpansion{}
+			}
 		}
 	}
 
