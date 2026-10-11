@@ -12194,7 +12194,7 @@ pub fn run(args []string) {
 		kept_functions << module_lifecycle_function_names
 		kept_functions << v3_kept_cached_functions(&cache_state.manager)
 		pruned_declarations = prune_unreferenced_cached_functions(mut a, kept_functions,
-			cached_module_function_names)
+			cached_module_function_names, cached_function_name_patterns)
 		if os.getenv('V3_CACHE_TRACE') != '' {
 			eprintln('  V3 cached declarations: left out ${pruned_declarations.count} functions that the program does not name')
 		}

@@ -606,8 +606,11 @@ operator or `str`, and so do exported functions, those marked `@[markused]`, `in
 the functions that mark-used seeds, and the functions that a stage of the compiler spells in a
 string literal: those of the runtime by their names (`cached_runtime_function_names`) and those
 of any other module of vlib with the name of the module, as `dl.interface_export_find`
-(`cached_module_function_names`, which keeps the function of that module only); a test keeps
-both lists complete. A stage that finds no
+(`cached_module_function_names`, which keeps the function of that module only). A name that a
+stage puts together when it runs is in no literal: the literals that are names with a part to
+fill in, as `map_hash_int_${size}` or `name + '_str'`, are kept as patterns
+(`cached_function_name_patterns`), and a function that one of them fits stays. A test works
+all three lists out from the sources of the stages again. A stage that finds no
 declaration of such a function can do something else without a word. The C generator
 checks the result: when the generated C names a function that was left out, or the C compiler
 reports an error in the program unit, the build starts again with every declaration, and records
