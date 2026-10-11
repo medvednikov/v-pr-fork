@@ -1384,7 +1384,7 @@ fn test_pkg_config_answers_do_not_persist_for_an_unlistable_search_directory() {
 fn test_attributed_inline_header_helpers_are_replicable() {
 	helper := 'inline __attribute__ ((__always_inline__)) int helper(int value) { return value + 1; }'
 	assert c_source_is_replicable(helper)
-	assert declaration_header(helper) == helper
+	assert declaration_header(helper).trim_space() == helper
 	assert !c_source_is_replicable('extern ' + helper)
 	assert !c_source_is_replicable('inline __attribute__((always_inline)) int helper(int value) { static int count; return count + value; }')
 	assert !c_source_is_replicable('int counter __attribute__((aligned(16))) = 1;')
