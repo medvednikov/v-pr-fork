@@ -9,7 +9,7 @@ fn test_production_bundled_gc_returns_free_pages() {
 		}
 		program := os.join_path(test_dir, 'unmap')
 		fixture := os.join_path(@VEXEROOT, 'vlib', 'builtin', 'testdata', 'gc_prod_unmap.c.v')
-		build := os.exec([@VEXE, '-prod', '-cc', 'clang', '-gc', 'boehm', '-d', 'use_bundled_libgc',
+		build := os.exec([@VEXE, '-prod', '-cc', 'cc', '-gc', 'boehm', '-d', 'use_bundled_libgc',
 			'-o', program, fixture])
 		assert build.exit_code == 0, build.output
 		result := os.exec([program])
