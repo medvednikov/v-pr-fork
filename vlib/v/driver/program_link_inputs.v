@@ -37,7 +37,9 @@ mut:
 	libraries      []string
 	framework_dirs []string
 	frameworks     []string
-	unknown        string
+	// The directory in which the command runs, or '' when it is not known.
+	build_dir string
+	unknown   string
 }
 
 // v3_compiler_options_with_value are the options of a C compiler driver whose next
@@ -49,7 +51,7 @@ const v3_compiler_options_with_value = ['-o', '-x', '-arch', '-target', '-u', '-
 	'-image_base', '-init', '-exported_symbol', '-unexported_symbol', '--param', '-G',
 	'-allowable_client', '-client_name', '-umbrella', '-sub_library', '-sub_umbrella',
 	'-multiply_defined', '-iprefix', '-iwithprefix', '-iwithprefixbefore', '-imultilib', '-dumpbase',
-	'-dumpdir', '-aux-info', '-A']
+	'-dumpdir', '-aux-info', '-A', '-iframework', '--sysroot', '-specs', '-include', '-imacros']
 
 // v3_compiled_source_suffixes are the endings by which a C compiler driver knows a
 // file that it compiles. A file of any other name goes to the linker.
@@ -259,23 +261,39 @@ struct V3LinkerArgument {
 
 // add_file records `path`, which the command reads: `as_input` says that the linker
 // reads it as an object, an archive, a library or a linker script, and not as it
-// is. A path that is not absolute is one below the directory of the build, which
-// the build makes for itself and removes: nothing of another build is there.
+// is. A relative path is one of the directory in which the command runs. The
+// build makes that directory for itself and removes it, so nothing of another
+// build is in it: only a path that leaves it names a file to follow.
 fn (mut c V3LinkCommand) add_file(path string, as_input bool) {
-	if path.len == 0 || os.is_dir(path) {
-		return
-	}
-	if !os.is_abs_path(path) {
-		if v3_relative_path_leaves_its_directory(path) {
-			c.unknown = '`${path}` is relative to the directory of the build, and not in it'
-		}
+	resolved := c.path_outside_the_build(path) or { return }
+	if os.is_dir(resolved) {
 		return
 	}
 	if as_input {
-		c.files << path
+		c.files << resolved
 	} else {
-		c.plain_files << path
+		c.plain_files << resolved
 	}
+}
+
+// path_outside_the_build returns `path` as an absolute one, or none for a path
+// that is empty or in the directory of the build. Where a relative path leaves a
+// directory that is not known, the inputs of the command are not known either.
+fn (mut c V3LinkCommand) path_outside_the_build(path string) ?string {
+	if path.len == 0 {
+		return none
+	}
+	if os.is_abs_path(path) {
+		return path
+	}
+	if !v3_relative_path_leaves_its_directory(path) {
+		return none
+	}
+	if c.build_dir.len == 0 {
+		c.unknown = '`${path}` is relative to the directory of the build, and not in it'
+		return none
+	}
+	return os.norm_path(os.join_path(c.build_dir, path))
 }
 
 // v3_relative_path_leaves_its_directory reports whether a relative path names
@@ -349,29 +367,74 @@ fn (mut c V3LinkCommand) add_linker_option(name string, value string, has_value 
 	return none
 }
 
-// add_attached_linker_option records an option of a linker that has its value
-// attached to it, as `-L/dir` has, and reports whether `arg` is one.
-fn (mut c V3LinkCommand) add_attached_linker_option(arg string) bool {
-	if arg.starts_with('--') || arg.len < 3 {
-		return false
+// V3AttachedOption is what an option of a linker with its value attached to it
+// names, as `-L/dir` does.
+enum V3AttachedOption {
+	no_option
+	library
+	library_dir
+	framework_dir
+	runtime_path
+	script
+	value
+}
+
+// v3_attached_linker_option tells what the argument `arg` of a linker names when
+// it is an option with its value attached, and returns the value with it.
+fn v3_attached_linker_option(arg string) (V3AttachedOption, string) {
+	if arg.starts_with('--') || arg.len < 3 || arg[0] != `-` {
+		return V3AttachedOption.no_option, ''
 	}
 	if library_prefix := v3_linker_library_prefix(arg) {
-		c.libraries << arg[library_prefix.len..]
-	} else if arg.starts_with('-L') {
-		c.library_dirs << arg[2..]
-	} else if arg.starts_with('-l') {
-		c.libraries << arg[2..]
-	} else if arg.starts_with('-F') {
-		c.framework_dirs << arg[2..]
-	} else if arg.starts_with('-R') {
-		// A directory for the run-time search path, or a file to take symbols of.
-		c.add_file(arg[2..], false)
-	} else if arg.starts_with('-T') && !arg.contains('=') {
-		c.add_file(arg[2..], true)
-	} else if arg[1] in [`z`, `m`, `O`] || (arg[1] == `G` && arg[2].is_digit()) {
+		return V3AttachedOption.library, arg[library_prefix.len..]
+	}
+	if arg.starts_with('-L') {
+		return V3AttachedOption.library_dir, arg[2..].trim_space()
+	}
+	if arg.starts_with('-l') {
+		return V3AttachedOption.library, arg[2..].trim_space()
+	}
+	if arg.starts_with('-F') {
+		return V3AttachedOption.framework_dir, arg[2..]
+	}
+	if arg.starts_with('-R') {
+		return V3AttachedOption.runtime_path, arg[2..]
+	}
+	if arg.starts_with('-T') && !arg.contains('=') && arg[1..] !in v3_linker_value_options {
+		return V3AttachedOption.script, arg[2..]
+	}
+	if arg[1] in [`z`, `m`, `O`] || (arg[1] == `G` && arg[2].is_digit()) {
 		// `-znow`, `-melf_x86_64`, `-G0`: a value that names no input.
-	} else {
-		return false
+		return V3AttachedOption.value, arg[2..]
+	}
+	return V3AttachedOption.no_option, ''
+}
+
+// add_attached_linker_option records an option of a linker that has its value
+// attached to it, and reports whether `arg` is one.
+fn (mut c V3LinkCommand) add_attached_linker_option(arg string) bool {
+	kind, value := v3_attached_linker_option(arg)
+	match kind {
+		.no_option {
+			return false
+		}
+		.library {
+			c.libraries << value
+		}
+		.library_dir {
+			c.library_dirs << value
+		}
+		.framework_dir {
+			c.framework_dirs << value
+		}
+		.runtime_path {
+			// A directory for the run-time search path, or a file to take symbols of.
+			c.add_file(value, false)
+		}
+		.script {
+			c.add_file(value, true)
+		}
+		.value {}
 	}
 	return true
 }
@@ -436,8 +499,10 @@ fn v3_linker_library_prefix(arg string) ?string {
 // whatever its name ends with, in the place that it has in the command, along
 // with what `-Wl,` and `-Xlinker` hand over and with the options that it takes for
 // the linker itself.
-fn v3_parse_link_command(args []string) V3LinkCommand {
-	mut command := V3LinkCommand{}
+fn v3_parse_link_command(args []string, build_dir string) V3LinkCommand {
+	mut command := V3LinkCommand{
+		build_dir: build_dir
+	}
 	mut linker_args := []V3LinkerArgument{}
 	mut i := 0
 	for i < args.len {
@@ -486,18 +551,15 @@ fn v3_parse_link_command(args []string) V3LinkCommand {
 			i += values
 			continue
 		}
-		if v3_linker_library_prefix(arg) != none || arg.starts_with('-L') || arg.starts_with('-l')
-			|| arg.starts_with('-F') || (arg.starts_with('-T') && arg.len > 2
-			&& !arg.contains('=') && !arg[2..].starts_with('text') && !arg[2..].starts_with('bss')
-			&& !arg[2..].starts_with('data')) {
+		kind, _ := v3_attached_linker_option(arg)
+		if kind in [.library, .library_dir, .framework_dir, .script] {
+			// The driver hands these to the linker as they are.
 			linker_args << V3LinkerArgument{arg, false}
 		} else if arg.contains('=') && !arg.starts_with('-D') && !arg.starts_with('-U') {
-			// `-fprofile-use=/path`, `--sysroot=/path`: only a file is an input, and
-			// the linker reads none of these as one of its own.
-			value := arg.all_after('=')
-			if os.is_abs_path(value) {
-				command.add_file(value, false)
-			}
+			// `-fprofile-use=/path`, `--sysroot=/path`: a file is an input, and the
+			// linker reads none of these as one of its own. The value of a macro
+			// names none.
+			command.add_file(arg.all_after('='), false)
 		}
 	}
 	command.add_linker_arguments(linker_args)
@@ -624,8 +686,8 @@ fn (mut command V3LinkCommand) expand_link_file(path string) {
 // directory of the search: the file where there is one, the path where there is
 // none, and the directory itself where that is not there. A library that is
 // installed, removed or replaced in any of them changes what the link reads.
-fn v3_program_link_inputs(args []string, linker_dir string, default_library_dirs []string) V3ProgramLinkInputs {
-	mut command := v3_parse_link_command(args)
+fn v3_program_link_inputs(args []string, linker_dir string, default_library_dirs []string, build_dir string) V3ProgramLinkInputs {
+	mut command := v3_parse_link_command(args, build_dir)
 	mut files := map[string]bool{}
 	mut missing := map[string]bool{}
 	mut expanded := map[string]bool{}
@@ -655,14 +717,9 @@ fn v3_program_link_inputs(args []string, linker_dir string, default_library_dirs
 	mut settled := false
 	for _ in 0 .. 16 {
 		mut library_dirs := []string{}
-		for dir in command.library_dirs {
+		for given in command.library_dirs.clone() {
 			// A directory that is relative is one of the build: see add_file.
-			if !os.is_abs_path(dir) {
-				if v3_relative_path_leaves_its_directory(dir) {
-					command.unknown = '`${dir}` is relative to the directory of the build, and not in it'
-				}
-				continue
-			}
+			dir := command.path_outside_the_build(given) or { continue }
 			if dir !in library_dirs {
 				library_dirs << dir
 			}
@@ -773,9 +830,10 @@ fn v3_default_link_library_dirs(manager &modulecache.Manager, linker string, bas
 		answer := if result.exit_code == 0 {
 			v3_parse_library_search_dirs(result.output).join('\n') + '\n'
 		} else {
-			'\n'
+			''
 		}
-		if manager.ensure_dir() {
+		// A query that failed may answer the next time.
+		if answer.len > 0 && manager.ensure_dir() {
 			os.write_file(record, answer) or {}
 		}
 		answer
@@ -831,15 +889,11 @@ fn v3_link_search_args(args []string) []string {
 	for i < args.len {
 		arg := args[i].trim_space()
 		i++
-		if arg in ['-isysroot', '--sysroot', '-target', '-arch', '-B', '-specs'] {
-			if i < args.len {
-				search << [arg, args[i].trim_space()]
-				i++
-			}
-			continue
-		}
 		values := v3_compiler_option_values(arg)
 		if values > 0 {
+			if arg in ['-isysroot', '--sysroot', '-target', '-arch', '-B', '-specs'] && i < args.len {
+				search << [arg, args[i].trim_space()]
+			}
 			i += values
 			continue
 		}
@@ -857,10 +911,8 @@ fn v3_link_search_args(args []string) []string {
 // of the program in the language that this compiler reads them in: GCC prints
 // where it searches in the language of the user.
 fn v3_run_in_c_locale(program string, args []string, work_folder string) os.Result {
-	env := os.find_abs_path_of_executable('env') or {
-		return cmdexec.run_in_merged(program, args, work_folder)
-	}
-	mut command := ['LC_ALL=C', 'LANGUAGE=C', program]
-	command << args
-	return cmdexec.run_in_merged(env, command, work_folder)
+	return cmdexec.run_in_merged_with_env(program, args, work_folder, {
+		'LC_ALL':   'C'
+		'LANGUAGE': 'C'
+	})
 }

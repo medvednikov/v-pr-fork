@@ -34,7 +34,7 @@ fn test_program_link_inputs_are_the_files_and_library_candidates_of_a_link() {
 	absent_dir := os.join_path(root, 'absent')
 	inputs := v3_program_link_inputs(['-std=gnu11', '-o', 'out', 'src.c', object, gone, '-L${first}',
 		'-L', second, '-lfoo', '-l', 'bar', '-I${root}', '-Wl,-rpath,${root}', '-L${absent_dir}'],
-		linker, [system])
+		linker, [system], '')
 	assert inputs.taken && inputs.unknown == ''
 	assert inputs.files == [runtime, object, archive, system_library].sorted()
 	assert inputs.identities == inputs.files.map(modulecache.file_metadata_signature(it))
@@ -69,7 +69,7 @@ fn test_program_link_inputs_include_the_files_of_linker_options() {
 		'-Wl,-force_load,${path('forced.a')}', '-Xlinker', path('xlinker.a'), '-force_load',
 		path('loaded.a'), '-exported_symbols_list', path('symbols.txt'),
 		'-Wl,--version-script=${path('version.map')}', '-L${root}', '-l:exact.a', '-Wl,-rpath,${root}',
-		'-Wl,-dead_strip'], '', []string{})
+		'-Wl,-dead_strip'], '', []string{}, '')
 	assert inputs.unknown == ''
 	assert inputs.files == names.map(path(it)).sorted()
 	assert inputs.missing == []
@@ -82,19 +82,19 @@ fn test_program_link_inputs_are_unknown_for_what_cannot_be_followed() {
 	}
 	thin := os.join_path(root, 'libthin.a')
 	os.write_file(thin, '!<thin>\n//                                              10        `\nmember.o/\n')!
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', thin], '', []string{}).unknown.contains('thin archive')
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L${root}', '-lthin'], '', []string{}).unknown.contains('thin archive')
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,${thin}'], '', []string{}).unknown.contains('thin archive')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', thin], '', []string{}, '').unknown.contains('thin archive')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L${root}', '-lthin'], '', []string{}, '').unknown.contains('thin archive')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,${thin}'], '', []string{}, '').unknown.contains('thin archive')
 	response := os.join_path(root, 'link.rsp')
 	os.write_file(response, thin)!
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '@${response}'], '', []string{}).unknown.len > 0
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-filelist', response], '', []string{}).unknown.len > 0
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '@${response}'], '', []string{}, '').unknown.len > 0
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-filelist', response], '', []string{}, '').unknown.len > 0
 	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,-filelist,${response}'], '',
-		[]string{}).unknown.len > 0
+		[]string{}, '').unknown.len > 0
 	// A script that does more than name its inputs.
 	script := os.join_path(root, 'libscript.so')
 	os.write_file(script, 'SEARCH_DIR(/somewhere)\nGROUP ( libother.so.1 )\n')!
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', script], '', []string{}).unknown.contains('linker script')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', script], '', []string{}, '').unknown.contains('linker script')
 }
 
 fn test_program_link_inputs_follow_a_linker_script() {
@@ -111,12 +111,12 @@ fn test_program_link_inputs_follow_a_linker_script() {
 	script := os.join_path(root, 'libscripted.so')
 	os.write_file(script, '/* GNU ld script */\nOUTPUT_FORMAT(elf64-x86-64)\nGROUP ( ${real_library} -lextra AS_NEEDED ( libneeded.so.1 ) )\n')!
 	inputs := v3_program_link_inputs(['-o', 'out', 'src.c', '-L${root}', '-lscripted'], '',
-		[]string{})
+		[]string{}, '')
 	assert inputs.unknown == ''
 	assert inputs.files == [script, real_library, extra, needed].sorted()
 	// A thin archive behind a script is found too.
 	os.write_file(extra, '!<thin>\n')!
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L${root}', '-lscripted'], '', []string{}).unknown.contains('thin archive')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L${root}', '-lscripted'], '', []string{}, '').unknown.contains('thin archive')
 }
 
 fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
@@ -139,7 +139,7 @@ fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
 	] {
 		mut command := ['-o', 'out', 'src.c']
 		command << args
-		inputs := v3_program_link_inputs(command, '', []string{})
+		inputs := v3_program_link_inputs(command, '', []string{}, '')
 		assert inputs.unknown == '', args.str()
 		assert inputs.files == [archive], args.str()
 		assert os.join_path(libs, 'libanswer.dylib') in inputs.missing, args.str()
@@ -149,7 +149,7 @@ fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
 		'-Wl,-rpath,${libs}', '-Wl,-install_name,${archive}', '-Wl,-z,now', '-Wl,-znow',
 		'-Wl,--build-id=sha1', '-Wl,-stack_size,0x4000000', '-Wl,-platform_version,macos,11.0,14.0',
 		'-Wl,--as-needed', '-Wl,-dead_strip', '-Wl,-undefined,dynamic_lookup', '-Wl,--exclude-libs,ALL',
-		'-Wl,-export_dynamic', '-Wl,-O1', '-Wl,-melf_x86_64'], '', []string{})
+		'-Wl,-export_dynamic', '-Wl,-O1', '-Wl,-melf_x86_64'], '', []string{}, '')
 	assert named.unknown == ''
 	assert named.files == []
 	// An option that is not known may read anything, and so may one that moves
@@ -164,18 +164,18 @@ fn test_program_link_inputs_read_what_goes_to_the_linker_as_one_command() {
 	] {
 		mut command := ['-o', 'out', 'src.c']
 		command << args
-		assert v3_program_link_inputs(command, '', []string{}).unknown.len > 0, args.str()
+		assert v3_program_link_inputs(command, '', []string{}, '').unknown.len > 0, args.str()
 	}
 	// The options of the compiler itself are many, and none of them is the linker's.
 	assert v3_program_link_inputs(['-O2', '-fwrapv', '--no-such-option', '-o', 'out', 'src.c'],
-		'', []string{}).unknown == ''
+		'', []string{}, '').unknown == ''
 	// A relative path is one of the directory of the build, unless it leaves it.
 	assert v3_program_link_inputs(['-o', 'out', 'src.c', 'module.o', '-Lcache', '-Wl,cache/a.o'],
-		'', []string{}).unknown == ''
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L../libs', '-lanswer'], '', []string{}).unknown.len > 0
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '../libs/libanswer.a'], '', []string{}).unknown.len > 0
+		'', []string{}, '').unknown == ''
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-L../libs', '-lanswer'], '', []string{}, '').unknown.len > 0
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '../libs/libanswer.a'], '', []string{}, '').unknown.len > 0
 	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,../libs/libanswer.a'], '',
-		[]string{}).unknown.len > 0
+		[]string{}, '').unknown.len > 0
 }
 
 fn test_program_link_inputs_give_an_option_the_value_that_follows_it_in_the_command() {
@@ -202,21 +202,77 @@ fn test_program_link_inputs_give_an_option_the_value_that_follows_it_in_the_comm
 	] {
 		mut command := ['-o', 'out', 'src.c']
 		command << args
-		inputs := v3_program_link_inputs(command, '', []string{})
+		inputs := v3_program_link_inputs(command, '', []string{}, '')
 		assert inputs.unknown == '', args.str()
 		assert inputs.files == [archive], args.str()
 	}
 	split := v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,--version-script', symbols,
-		'-L${libs}', '-lanswer'], '', []string{})
+		'-L${libs}', '-lanswer'], '', []string{}, '')
 	assert split.unknown == ''
 	assert split.files == [archive, symbols].sorted()
 	// A macro that the compiler is given a value for names no file, and neither
 	// does a value that is no absolute path.
 	defined := v3_program_link_inputs(['-o', 'out', 'src.c', '-DASSETS=../assets', '-DROOT=${archive}',
-		'-fdebug-prefix-map=../src=.', '-std=gnu11', '--sysroot=${root}', '-fprofile-use=${symbols}'],
-		'', []string{})
+		'-std=gnu11', '--sysroot=${root}', '-fprofile-use=${symbols}', '-march=native'], '',
+		[]string{}, '')
 	assert defined.unknown == ''
 	assert defined.files == [symbols]
+}
+
+fn test_program_link_inputs_find_what_a_relative_path_names_outside_the_build() {
+	root := link_inputs_fixture('program_link_relative')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	// The command runs in a directory that the build made beside the output.
+	build_dir := os.join_path(root, 'out.v3cc')
+	libs := os.join_path(root, 'libs')
+	os.mkdir_all(build_dir)!
+	os.mkdir_all(libs)!
+	archive := os.join_path(libs, 'libanswer.a')
+	profile := os.join_path(root, 'default.profdata')
+	os.write_file(archive, '!<arch>\nanswer')!
+	os.write_file(profile, 'profile')!
+	inputs := v3_program_link_inputs(['-o', 'out', 'src.c', 'cache/module.o', '-L../libs', '-lanswer',
+		'-fprofile-use=../default.profdata', '-fdebug-prefix-map=../src=.', '-iframework',
+		'../Frameworks', '-Wl,-rpath,../libs', '-I../include'], '', []string{}, build_dir)
+	assert inputs.unknown == ''
+	assert inputs.files == [profile, archive].sorted()
+	// A file that is not there now may be there for the next build.
+	assert os.join_path(libs, 'libanswer.dylib') in inputs.missing
+	direct := v3_program_link_inputs(['-o', 'out', 'src.c', '../libs/libanswer.a',
+		'-Wl,../libs/libanswer.a'],
+		'', []string{}, build_dir)
+	assert direct.unknown == ''
+	assert direct.files == [archive]
+	// Where the directory of the build is not known, such a path names nothing
+	// that can be followed.
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-fprofile-use=../default.profdata'],
+		'', []string{}, '').unknown.len > 0
+}
+
+fn test_an_argument_of_the_driver_is_told_from_one_that_it_hands_to_the_linker() {
+	assert v3_compiler_option_values('-iframework') == 1
+	assert v3_compiler_option_values('-sectcreate') == 3
+	assert v3_compiler_option_values('-L') == 1
+	assert v3_compiler_option_values('-O2') == 0
+	kind, value := v3_attached_linker_option('-L/dir')
+	assert kind == .library_dir && value == '/dir'
+	for arg, expected in {
+		'-lanswer':      V3AttachedOption.library
+		'-weak-lanswer': V3AttachedOption.library
+		'-F/frameworks': V3AttachedOption.framework_dir
+		'-R/run':        V3AttachedOption.runtime_path
+		'-T/script.ld':  V3AttachedOption.script
+		'-Ttext':        V3AttachedOption.no_option
+		'-znow':         V3AttachedOption.value
+		'--library=x':   V3AttachedOption.no_option
+		'-exported':     V3AttachedOption.no_option
+		'/abs/libfoo.a': V3AttachedOption.no_option
+	} {
+		found, _ := v3_attached_linker_option(arg)
+		assert found == expected, arg
+	}
 }
 
 fn test_program_link_inputs_follow_a_linker_script_of_any_name() {
@@ -240,15 +296,15 @@ fn test_program_link_inputs_follow_a_linker_script_of_any_name() {
 	] {
 		mut command := ['-o', 'out', 'src.c']
 		command << args
-		inputs := v3_program_link_inputs(command, '', []string{})
+		inputs := v3_program_link_inputs(command, '', []string{}, '')
 		assert inputs.unknown == '', args.str()
 		assert inputs.files == [archive, script].sorted(), args.str()
 	}
 	// A script that lays the program out does more than name inputs.
 	layout := os.join_path(root, 'layout.x')
 	os.write_file(layout, 'SECTIONS { . = 0x10000; }\n')!
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', layout], '', []string{}).unknown.contains('linker script')
-	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,-T,${layout}'], '', []string{}).unknown.contains('linker script')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', layout], '', []string{}, '').unknown.contains('linker script')
+	assert v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,-T,${layout}'], '', []string{}, '').unknown.contains('linker script')
 	// A list of symbols is read as it is, and a source is compiled.
 	symbols := os.join_path(root, 'symbols.txt')
 	source := os.join_path(root, 'extra.c')
@@ -256,13 +312,13 @@ fn test_program_link_inputs_follow_a_linker_script_of_any_name() {
 	os.write_file(source, 'int extra(void) { return 1; }\n')!
 	plain := v3_program_link_inputs(['-o', 'out', 'src.c', source, '-Wl,--version-script=${symbols}',
 		'-exported_symbols_list', symbols, '-Wl,-exported_symbols_list,${symbols}'], '',
-		[]string{})
+		[]string{}, '')
 	assert plain.unknown == ''
 	assert plain.files == [source, symbols].sorted()
 	// A text stub of a library names what the library exports, not other files.
 	stub := os.join_path(root, 'libstub.tbd')
 	os.write_file(stub, '--- !tapi-tbd\ntbd-version: 4\n')!
-	stubbed := v3_program_link_inputs(['-o', 'out', 'src.c', stub], '', []string{})
+	stubbed := v3_program_link_inputs(['-o', 'out', 'src.c', stub], '', []string{}, '')
 	assert stubbed.unknown == '' && stubbed.files == [stub]
 }
 

@@ -14902,7 +14902,7 @@ pub fn run(args []string) {
 			if program_executable_enabled && !is_shared && !is_o {
 				program_link_inputs = v3_program_link_inputs(tcc_args, tcc_resources.install_dir,
 					v3_default_link_library_dirs(&cache_state.manager, tcc_path, tcc_args.filter(it.trim_space().starts_with('-B')),
-						tcc_sdk_root))
+						tcc_sdk_root), cc_dir)
 			}
 			result = if injected_failure := os.getenv_opt('V3_TEST_FORCE_IMPLICIT_TCC_FAILURE') {
 				os.Result{
@@ -15068,7 +15068,7 @@ pub fn run(args []string) {
 							macos_sdk_root_cache.get()
 						} else {
 							''
-						}))
+						}), cc_dir)
 				}
 				result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
 				if program_executable_enabled && result.exit_code == 0
