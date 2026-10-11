@@ -4294,6 +4294,7 @@ mut:
 // V-shipped native file: the files it includes, and whether its text can be
 // replicated into every cached module object.
 struct V3NativeInputExpansion {
+	roots      []string
 	paths      []string
 	replicable bool
 }
@@ -4457,7 +4458,7 @@ fn v3_native_input_closure_with_mbedtls(native_inputs &cgen.CacheNativeInputs, v
 				continue
 			}
 			requires_replication := check_replication && native_inputs.native_paths[path]
-			if path !in expansions && mbedtls.replicable && v3_is_bundled_mbedtls_header(path, vroot) {
+			if path !in expansions && mbedtls.replicable && path in mbedtls.roots {
 				expansions[path] = mbedtls.paths.clone()
 				replicable[path] = true
 			}
@@ -4686,19 +4687,29 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 		mut expanded_paths := map[string]bool{}
 		v3_expand_shipped_native_file(path, native_inputs.include_dirs,
 			prefs.vroot, true, mut active, mut expanded_paths)
+		mut reaches_mbedtls := false
 		for dependency in visited.keys() {
 			if v3_is_bundled_mbedtls_header(dependency, prefs.vroot) {
 				headers[dependency] = true
+				reaches_mbedtls = true
 			} else if !expanded_paths[dependency] {
 				return V3NativeInputExpansion{}
 			}
+		}
+		if reaches_mbedtls {
+			if cgen.cache_native_input_is_source(path) { return V3NativeInputExpansion{} }
+			headers[path] = true
 		}
 	}
 
 	mut paths := headers.keys()
 	paths.sort()
 	source := os.join_path(os.vtmp_dir(), 'v3_mbedtls_headers_${tempname.unique_token()}.c')
-	text := paths.map('#include "' + it.replace('\\', '/') + '"').join('\n')
+	ordered := paths.filter(v3_is_bundled_mbedtls_header(it, prefs.vroot))
+		.clone()
+	mut probe_paths := ordered.clone()
+	probe_paths << paths.filter(!v3_is_bundled_mbedtls_header(it, prefs.vroot))
+	text := probe_paths.map('#include "' + it.replace('\\', '/') + '"').join('\n')
 	os.write_file(source, text) or { return V3NativeInputExpansion{} }
 	defer { os.rm(source) or {} }
 	mut args := [c_standard_flag(prefs.c99, false)]
@@ -4718,6 +4729,7 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 	// Probe on each build: literal expansion records do not include preprocessing
 	// flags. Every active header, including system headers, remains a cache input.
 	return V3NativeInputExpansion{
+		roots:      paths
 		paths:      dependencies.files.filter(os.real_path(it) != os.real_path(source)).map(os.real_path(it))
 		replicable: true
 	}
