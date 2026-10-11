@@ -4526,9 +4526,27 @@ fn v3_mbedtls_default_header_context(a &flat.FlatAst, flags []string) bool {
 		if node.kind == .c_fn_decl && node.value.all_after_last('.') == '__sputc' {
 			return false
 		}
-		if node.kind == .directive && node.value in ['define', 'undef']
-			&& (node.typ.contains('MBEDTLS_') || node.typ.contains('PSA_')) {
-			return false
+		if node.kind != .directive { continue }
+		if node.value.starts_with('@attributes:') {
+			for attr in node.generic_params() {
+				if attr.all_before(':').trim_space() == 'c'
+					&& attr.all_after(':').trim_space().trim('\'"') == '__sputc' {
+					return false
+				}
+			}
+		}
+		if node.value in ['define', 'undef'] {
+			// These builtin callback wrappers do not alter header declarations.
+			if node.value != 'define' || node.typ !in [
+				'v_gc_set_warn_proc(cb) GC_set_warn_proc((GC_warn_proc)(cb))',
+				'v_gc_get_warn_proc() ((void *)GC_get_warn_proc())',
+				'v_gc_set_abort_func(cb) GC_set_abort_func((GC_abort_func)(cb))',
+				'v_gc_get_abort_func() ((void *)GC_get_abort_func())',
+				'v_gc_call_abort_func(fn, msg) ((GC_abort_func)(fn))(msg)',
+				'v_signal_with_handler_cast(sig, handler) signal((sig), (void (*)(int))(handler))',
+			] {
+				return false
+			}
 		}
 	}
 	return true
@@ -4613,12 +4631,19 @@ fn v3_native_preprocessed_declarations_for_replication(source string) string {
 // A sibling input can hide directives behind comments or macro continuations.
 // Type references and V's own helper include guards do not override configuration.
 fn v3_native_text_overrides_mbedtls(source string) bool {
-	for line in v3_native_directive_text(source).split_into_lines() {
+	logical_source := v3_native_directive_text(source)
+	if logical_source.contains('__sputc') { return true }
+	for line in logical_source.split_into_lines() {
 		trimmed := line.trim_space()
 		if !trimmed.starts_with('#') { continue }
 		parts := trimmed[1..].trim_space().fields()
-		if parts.len >= 2 && parts[0] in ['define', 'undef'] && (parts[1].starts_with('MBEDTLS_') || parts[1].starts_with('PSA_')) {
-			return true
+		if parts.len >= 2 && parts[0] in ['define', 'undef'] {
+			name := parts[1].all_before('(')
+			if name.starts_with('MBEDTLS_') || name.starts_with('PSA_')
+				|| name in ['__sputc', 'inline', '__inline', '__inline__', '__attribute__',
+					'__attribute', '__always_inline__', 'always_inline', 'gnu_inline', '__gnu_inline__'] {
+				return true
+			}
 		}
 	}
 	return false

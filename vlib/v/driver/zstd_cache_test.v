@@ -25,6 +25,11 @@ fn test_shipped_zstd_cache_owner_tracks_implementation() ! {
 	assert source in closure.inputs['zstd']
 }
 
+fn test_brotli_native_wrappers_are_stateless_and_replicable() ! {
+	source := os.read_file(os.join_path(@VEXEROOT, 'vlib', 'compress', 'brotli', 'brotli_dl.h'))!
+	assert modulecache.c_source_is_replicable(source)
+}
+
 fn test_native_preprocessed_type_boundaries_and_config_overrides() {
 	source := 'enum { QOS_NORMAL = 1 }; typedef unsigned int qos_class_t;'
 	assert !modulecache.c_source_is_replicable(source)
@@ -50,6 +55,9 @@ fn test_native_config_override_logical_directives() {
 	assert v3_native_text_overrides_mbedtls('#undef PSA_WANT_ALG_SHA_256')
 	assert v3_native_text_overrides_mbedtls('/* context */ #define MBEDTLS_CONFIG_FILE "custom.h"')
 	assert !v3_native_text_overrides_mbedtls('#define OTHER_CONFIG "custom.h"')
+	assert v3_native_text_overrides_mbedtls('#define __sputc renamed_sputc')
+	assert v3_native_text_overrides_mbedtls('int __sputc(int value);')
+	assert v3_native_text_overrides_mbedtls('#define inline extern inline')
 	assert !v3_native_text_overrides_mbedtls('#define V_MBEDTLS_HELPERS_H\nmbedtls_ssl_context* context;')
 	mut ast := flat.FlatAst.new()
 	ast.add_node(flat.Node{ kind: .directive, value: 'define', typ: 'MBEDTLS_CONFIG_FILE "custom.h"' })
@@ -79,6 +87,24 @@ fn test_preprocessed_sdk_inline_annotation_preserves_replication_guards() {
 		ast.add_node(flat.Node{ kind: .c_fn_decl, value: name })
 		assert !v3_mbedtls_default_header_context(&ast, [])
 	}
+	mut renamed := flat.FlatAst.new()
+	renamed.add_node(flat.Node{ kind: .c_fn_decl, value: 'sputc_alias' })
+	renamed.add_node(flat.Node{
+		kind:    .directive
+		value:   '@attributes:0'
+		payload: flat.node_payload(['c_extern', 'c: "__sputc"'])
+	})
+	assert !v3_mbedtls_default_header_context(&renamed, [])
+	mut aliased := flat.FlatAst.new()
+	aliased.add_node(flat.Node{ kind: .directive, value: 'define', typ: '__sputc custom_sputc' })
+	assert !v3_mbedtls_default_header_context(&aliased, [])
+	mut builtin_wrappers := flat.FlatAst.new()
+	builtin_wrappers.add_node(flat.Node{
+		kind:  .directive
+		value: 'define'
+		typ:   'v_gc_set_warn_proc(cb) GC_set_warn_proc((GC_warn_proc)(cb))'
+	})
+	assert v3_mbedtls_default_header_context(&builtin_wrappers, [])
 }
 
 fn test_transitive_native_configuration_override_is_not_default() {

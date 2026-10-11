@@ -6,8 +6,8 @@ copy of V's bundled zstd implementation in the program translation unit. Other u
 use the public declarations embedded in the bundled amalgamation. Changes to the
 native source remain cache inputs and invalidate affected entries. Bundled mbedTLS
 headers are checked with the selected C preprocessor and their active dependencies
-are tracked. Custom mbedTLS/PSA configuration directives and forced headers keep
-the conservative fallback when their original context cannot be reconstructed.
+are tracked. Custom native configuration directives, renamed SDK bindings, and forced
+headers keep the conservative fallback when their original context cannot be reconstructed.
 Production, shared, and GNU89 inline modes retain this fallback for bundled mbedTLS headers.
 
 Set `V3_CACHE_TRACE=1` to inspect cache decisions, and use `-show-timings` to see
