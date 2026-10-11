@@ -28,6 +28,8 @@ import encoding.xml
 doc := xml.XMLDocument.from_file('test/sample.xml')!
 ```
 
+Attribute names must be unique within an element. Repeated attribute names produce a parse error.
+
 ### Validating XML Documents
 
 Simply call `validate` on the parsed XML document.
