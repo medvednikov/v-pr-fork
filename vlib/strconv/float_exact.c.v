@@ -112,6 +112,24 @@ fn format_float_magnitude(magnitude string, p BF_param) string {
 	return pad + sign + decimal_digits
 }
 
+fn exact_float_fixed(f f64, requested_precision int) string {
+	mut bits := Uf64{}
+	bits.f = f
+	u := unsafe { bits.u }
+	if (u >> 52) & 0x7ff == 0x7ff {
+		return f64_to_str(f, 17)
+	}
+	precision := if requested_precision > 0 { requested_precision } else { 0 }
+	decimal_digits, exponent := exact_float_decimal(f)
+	mut integer := rounded_float_integer(decimal_digits, exponent + precision)
+	if integer.len <= precision {
+		integer = '0'.repeat(precision + 1 - integer.len) + integer
+	}
+	point := integer.len - precision
+	magnitude := if precision == 0 { integer } else { integer[..point] + '.' + integer[point..] }
+	return if u >> 63 != 0 { '-' + magnitude } else { magnitude }
+}
+
 fn exact_float_scientific(f f64, requested_precision int) string {
 	mut bits := Uf64{}
 	bits.f = f
