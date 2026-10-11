@@ -35,7 +35,8 @@ fn test_native_preprocessed_type_boundaries_and_config_overrides() {
 	mut ast := flat.FlatAst.new()
 	assert v3_mbedtls_default_header_context(ast, ['-I/vendor/include'])
 	for flags in [['-D', 'MBEDTLS_CONFIG_FILE="custom.h"'], ['-UMBEDTLS_CONFIG_FILE'],
-		['-include', 'custom.h'], ['-imacroscustom.h'], ['-Wp,-DPSA_WANT_ALG_SHA_256=1']] {
+		['-include', 'custom.h'], ['-imacroscustom.h'], ['-Wp,-DPSA_WANT_ALG_SHA_256=1'],
+		['-fgnu89-inline'], ['-std=c89'], ['-std=gnu89']] {
 		assert !v3_mbedtls_default_header_context(ast, flags)
 	}
 }

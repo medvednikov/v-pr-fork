@@ -4528,6 +4528,8 @@ fn c_declaration_head_is_function(value string) bool {
 	return value.contains('(') && !c_contains_top_level_parenthesized_pointer_declarator(value)
 		&& (!c_contains_declaration_attribute(value)
 			|| (c_declaration_head_is_inline(value)
+				&& !c_code_contains_identifier(value, 'gnu_inline')
+				&& !c_code_contains_identifier(value, '__gnu_inline__')
 				&& c_function_declaration_identifier(value) != none))
 		&& !c_declaration_head_is_control_flow(value)
 		&& !c_has_top_level_assign(value)

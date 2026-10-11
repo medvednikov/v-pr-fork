@@ -1386,6 +1386,8 @@ fn test_attributed_inline_header_helpers_are_replicable() {
 	assert c_source_is_replicable(helper)
 	assert declaration_header(helper).trim_space() == helper
 	assert !c_source_is_replicable('extern ' + helper)
+	assert !c_source_is_replicable('inline __attribute__((gnu_inline)) int helper(int value) { return value; }')
+	assert !c_source_is_replicable('inline __attribute__((__gnu_inline__)) int helper(int value) { return value; }')
 	assert !c_source_is_replicable('inline __attribute__((always_inline)) int helper(int value) { static int count; return count + value; }')
 	assert !c_source_is_replicable('int counter __attribute__((aligned(16))) = 1;')
 	assert !c_source_is_replicable('static void (*callback)(void) __attribute__((used));')

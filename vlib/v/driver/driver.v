@@ -4513,7 +4513,9 @@ fn v3_is_bundled_mbedtls_header(path string, vroot string) bool {
 fn v3_mbedtls_default_header_context(a &flat.FlatAst, flags []string) bool {
 	for flag in flags {
 		if flag.contains('MBEDTLS_') || flag.contains('PSA_') || flag.contains('-include')
-			|| flag.contains('imacros') || flag.starts_with('/FI') {
+			|| flag.contains('imacros') || flag.starts_with('/FI')
+			|| flag == '-fgnu89-inline'
+			|| flag in ['-std=c89', '-std=gnu89', '-std=c90', '-std=gnu90', '-std=iso9899:1990'] {
 			return false
 		}
 	}
