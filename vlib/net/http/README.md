@@ -19,6 +19,10 @@ for compatibility. Their standard phrases are `Early Hints` (103) and `Too Early
 Status 203 uses `Non-Authoritative Information`, 207 uses `Multi-Status`, and 418 uses
 `I'm a teapot`.
 
+A server without an explicit `listener` opens a socket on its configured `addr`, even when
+standard input is a socket. An explicitly supplied listener may use descriptor zero. Failed
+accepts other than timeouts pause briefly before retrying.
+
 ## Making requests
 
 ```v ignore
