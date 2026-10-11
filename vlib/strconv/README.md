@@ -117,6 +117,12 @@ These functions round the shortest decimal representation half up, then append z
 needed. They do not round the exact binary value like C's `printf`: for example,
 `f64_to_str_pad(0.1, 20)` gives `1.00000000000000000000e-01`.
 
+On the C backend, `format_es` rounds the exact binary `f64` value to the requested scientific
+precision half up. This preserves subnormal digits: `format_es(5e-324, len1: 2)`
+returns `4.94e-324`. Zero precision omits the decimal point; zero values receive the requested
+padding. `BF_param.positive` supplies the sign, including for negative zero, when calling
+`format_es` directly. The shortest-form `f64_to_str_pad` behaviour described above is unchanged.
+
 ## Buffer formatting
 
 On the C backend, `format_fl` and `f64_to_str_lnd1` format the exact binary `f64` value

@@ -129,3 +129,26 @@ fn exact_float_fixed(f f64, requested_precision int) string {
 	magnitude := if precision == 0 { integer } else { integer[..point] + '.' + integer[point..] }
 	return if u >> 63 != 0 { '-' + magnitude } else { magnitude }
 }
+
+fn exact_float_scientific(f f64, requested_precision int) string {
+	mut bits := Uf64{}
+	bits.f = f
+	u := unsafe { bits.u }
+	if (u >> 52) & 0x7ff == 0x7ff {
+		return f64_to_str(f, 17)
+	}
+	precision := if requested_precision > 0 { requested_precision } else { 0 }
+	decimal_digits, decimal_exponent := exact_float_decimal(f)
+	mut exponent := decimal_digits.len + decimal_exponent - 1
+	mut rounded := rounded_float_integer(decimal_digits, precision + 1 - decimal_digits.len)
+	if rounded.len > precision + 1 {
+		exponent++
+		rounded = rounded[..precision + 1]
+	}
+	exp_digits := (if exponent < 0 { -exponent } else { exponent }).str()
+	exp_sign := if exponent < 0 { 'e-' } else { 'e+' }
+	exp_padding := if exp_digits.len < 2 { '0' } else { '' }
+	mantissa := if precision == 0 { rounded } else { rounded[..1] + '.' + rounded[1..] }
+	sign := if u >> 63 != 0 { '-' } else { '' }
+	return sign + mantissa + exp_sign + exp_padding + exp_digits
+}
