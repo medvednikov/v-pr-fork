@@ -2094,6 +2094,29 @@ fn run_v_source_from_stdin(args []string, input_index int) {
 	exit(exit_code)
 }
 
+fn run_v_inline_source(args []string, option_index int, consumed int, source string) {
+	temporary_source := os.join_path(os.getwd(), '.v3_inline_${os.getpid()}_${tempname.unique_token()}.vsh')
+	os.write_file(temporary_source, source) or {
+		eprintln('cannot create temporary inline source file: ${err.msg()}')
+		exit(1)
+	}
+	mut child_args := args[..option_index].clone()
+	child_args << ['run', temporary_source]
+	child_args << args[option_index + consumed..]
+	mut process := os.new_process(os.executable())
+	process.set_args(child_args)
+	process.wait()
+	exit_code := if process.code >= 0 { process.code } else { 1 }
+	process.close()
+	os.rm(temporary_source) or {
+		eprintln('cannot remove temporary inline source file: ${err.msg()}')
+		if exit_code == 0 {
+			exit(1)
+		}
+	}
+	exit(exit_code)
+}
+
 fn maybe_delegate_v3_to_vvmrc(input_file string, verbose bool) {
 	if os.getenv(v3_vvmrc_skip_env) != '' || input_file in ['', '-'] {
 		return
@@ -9008,7 +9031,7 @@ fn parse_memory_limit(value string) !i64 {
 }
 
 fn v3_driver_option_requires_value(option string) bool {
-	return option in ['-o', '-output', '-b', '-backend', '-os', '-arch', '-compile-backend',
+	return option in ['-e', '-o', '-output', '-b', '-backend', '-os', '-arch', '-compile-backend',
 		'--compile-backend', '-d', '-define', '-gc', '-cc', '-thread-stack-size', '-path', '-cov',
 		'-coverage', '-file-list', '-message-limit', '-printfn', '-generate-c-project', '-test-runner',
 		'-run-only', '-profile-fns', '-trace-fns', '-subsystem', '-exclude', '-dump-files', '-icon',
@@ -9582,7 +9605,19 @@ pub fn run(args []string) {
 			eprintln('option `${args[i]}` requires a value')
 			exit(1)
 		}
-		if args[i] in ['run', 'crun'] && input_file.len == 0 && !should_run {
+		if args[i] == '-e' || args[i].starts_with('-e=') || args[i] == '-http' {
+			consumed := if args[i] == '-e' { 2 } else { 1 }
+			source := if args[i] == '-http' {
+				'import net.http.file; file.serve()'
+			} else if args[i] == '-e' {
+				args[i + 1]
+			} else {
+				args[i].all_after('=')
+			}
+			clear_macos_v3_compiler_error_fallback(macos_v3_fallback_file)
+			run_v_inline_source(args, i, consumed, source)
+			return
+		} else if args[i] in ['run', 'crun'] && input_file.len == 0 && !should_run {
 			should_run = true
 			is_crun = args[i] == 'crun'
 			command_seen = true
