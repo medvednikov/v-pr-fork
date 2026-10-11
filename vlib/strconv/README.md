@@ -119,6 +119,12 @@ needed. They do not round the exact binary value like C's `printf`: for example,
 
 ## Buffer formatting
 
+On the C backend, `format_fl` and `f64_to_str_lnd1` format the exact binary `f64` value
+in fixed decimal notation, rounded to the requested fractional precision half up.
+Large integer values retain every digit, and precision can expose digits beyond the shortest
+decimal representation: `format_fl(0.1, len1: 20)` returns `0.10000000000000000555`.
+`BF_param.positive` supplies the sign when calling `format_fl` directly.
+
 `write_dec` and `write_dec_u` write a decimal integer into a caller-provided `[]u8`
 buffer. They return the number of bytes written, or `-1` when the buffer is too small.
 
