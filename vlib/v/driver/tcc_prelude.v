@@ -275,11 +275,13 @@ fn v3_has_include_names(source string) []string {
 }
 
 // v3_preprocessed_files returns the files that the line markers of preprocessed C
-// name, which are all that the preprocessor read, and one of them that the build
-// made for itself in `build_dir`, if there is one.
-fn v3_preprocessed_files(preprocessed string, build_dir string) ([]string, string) {
+// name, which are all that the preprocessor read, one of them that the build made
+// for itself in `build_dir`, if there is one, and whether one of them is named
+// relative to that directory and is not in it.
+fn v3_preprocessed_files(preprocessed string, build_dir string) ([]string, string, bool) {
 	mut files := map[string]bool{}
 	mut of_the_build := ''
+	mut relative := false
 	mut pos := 0
 	for pos < preprocessed.len {
 		mut line_end := preprocessed.index_after_('\n', pos)
@@ -295,7 +297,8 @@ fn v3_preprocessed_files(preprocessed string, build_dir string) ([]string, strin
 				mut path := line[open + 1..close]
 				// The preprocessor names a file that it found through a relative
 				// directory relative to the directory that it runs in.
-				if !os.is_abs_path(path) && build_dir.len > 0 && path != v3_tcc_prelude_input_name
+				was_relative := !os.is_abs_path(path)
+				if was_relative && build_dir.len > 0 && path != v3_tcc_prelude_input_name
 					&& !path.starts_with('<') {
 					path = os.norm_path(os.join_path(build_dir, path))
 				}
@@ -303,12 +306,15 @@ fn v3_preprocessed_files(preprocessed string, build_dir string) ([]string, strin
 					of_the_build = path
 				} else if os.is_abs_path(path) {
 					files[path] = true
+					if was_relative {
+						relative = true
+					}
 				}
 			}
 		}
 		pos = line_end + 1
 	}
-	return files.keys(), of_the_build
+	return files.keys(), of_the_build, relative
 }
 
 // v3_environment_dirs returns the directories that the variable `name` of the
@@ -622,11 +628,14 @@ fn v3_trace_tcc_prelude(message string) {
 
 // v3_tcc_prelude_key identifies the preprocessed form of `prelude` for one TinyCC
 // and one set of arguments. TinyCC also takes include directories from the
-// environment.
-fn v3_tcc_prelude_key(prelude string, tcc_path string, preprocess_args []string) string {
+// environment. `output_dir` is the directory beside which TinyCC runs when the
+// prelude, the arguments or the environment name a file relative to it, and ''
+// when they do not.
+fn v3_tcc_prelude_key(prelude string, tcc_path string, preprocess_args []string, output_dir string) string {
 	mut hash := u64(1469598103934665603)
 	for part in [v3_tcc_prelude_format, os.real_path(tcc_path), v3_cache_file_identity(tcc_path),
-		preprocess_args.join('\x00'), os.getenv('CPATH'), os.getenv('C_INCLUDE_PATH'), prelude] {
+		preprocess_args.join('\x00'), os.getenv('CPATH'), os.getenv('C_INCLUDE_PATH'), output_dir,
+		prelude] {
 		hash = c_hash_bytes(hash, part.bytes())
 		hash = c_hash_bytes(hash, [u8(0xff)])
 	}
@@ -652,7 +661,16 @@ fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, 
 	}
 	prelude := source[..end]
 	preprocess_args := v3_tcc_preprocess_args(tcc_args, source_name)
-	key := v3_tcc_prelude_key(prelude, tcc_path, preprocess_args)
+	// A relative path that leaves the directory of the build names a file by where
+	// the output goes: the form is kept for that place then.
+	output_dir := if v3_flags_name_relative_paths(preprocess_args)
+		|| v3_flags_name_relative_paths([os.getenv('CPATH'), os.getenv('C_INCLUDE_PATH')])
+		|| prelude.contains('"../') || prelude.contains('<../') {
+		os.dir(cc_dir)
+	} else {
+		''
+	}
+	key := v3_tcc_prelude_key(prelude, tcc_path, preprocess_args, output_dir)
 	cached := os.join_path(manager.dir, 'tcc_prelude_${key}.i')
 	stamp_path := cached + '.stamp'
 	if stamp := os.read_file(stamp_path) {
@@ -698,9 +716,15 @@ fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, 
 		return none
 	}
 	preprocessed := os.read_file(output_file) or { return none }
-	read, of_the_build := v3_preprocessed_files(preprocessed, cc_dir)
-	inputs := v3_header_inputs(read, prelude, v3_tcc_include_search(manager, tcc_path, preprocess_args,
+	read, of_the_build, relative_paths := v3_preprocessed_files(preprocessed, cc_dir)
+	mut inputs := v3_header_inputs(read, prelude, v3_tcc_include_search(manager, tcc_path, preprocess_args,
 		cc_dir), before_preprocessing)
+	if relative_paths {
+		inputs.relative_paths = true
+		if output_dir.len == 0 && inputs.unknown.len == 0 {
+			inputs.unknown = 'a header is named relative to the directory of the output'
+		}
+	}
 	mut form := v3_tcc_split_preprocessed(preprocessed)
 	if form.unusable.len == 0 && v3_tcc_source_has_build_time_macros(prelude) {
 		form.unusable = 'it asks for the time or the count of the compilation'
@@ -719,8 +743,9 @@ fn v3_tcc_prelude(manager &modulecache.Manager, source string, tcc_path string, 
 		verify_args << ['-E', '-dD', '-o', os.file_name(output_file), os.file_name(verify_file)]
 		verified := cmdexec.run_in(tcc_path, verify_args, cc_dir)
 		if verified.exit_code != 0 {
-			if !verified.output.contains('error') {
-				// TinyCC did not run, or was stopped: the next build asks again.
+			if !v3_c_output_reports_source_error(verified.output) {
+				// TinyCC did not run, was stopped, or could not write: that says
+				// nothing of the form, and the next build asks again.
 				v3_trace_tcc_prelude('not verified: ${verified.output.all_before('\n')}')
 				return none
 			}

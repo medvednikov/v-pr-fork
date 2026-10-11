@@ -255,6 +255,9 @@ fn (mut inputs V3ProgramLinkInputs) add_header_inputs(headers &V3HeaderInputs) {
 		inputs.unknown = 'the C of the program asks for the time of its compilation'
 		return
 	}
+	if headers.relative_paths {
+		inputs.relative_paths = true
+	}
 	for i, file in headers.files {
 		if file !in inputs.files {
 			inputs.files << file
@@ -282,22 +285,29 @@ fn (mut inputs V3ProgramLinkInputs) add_compiled_headers(manager &modulecache.Ma
 		return
 	}
 	mut read := []string{}
+	mut relative_paths := false
 	for name in v3_parse_dependency_file(text) {
 		path := if os.is_abs_path(name) { name } else { os.norm_path(os.join_path(cc_dir, name)) }
 		// What is in the directory of the build is made by the build, and what the
 		// linker reads is an input of the link.
 		if !path.starts_with(cc_dir + '/') && !v3_path_is_link_input(path) && path !in read {
 			read << path
+			if !os.is_abs_path(name) {
+				relative_paths = true
+			}
 		}
 	}
-	headers := v3_kept_header_inputs(manager, read, unit, search, before)
+	mut headers := v3_kept_header_inputs(manager, read, unit, search, before)
+	if relative_paths {
+		headers.relative_paths = true
+	}
 	inputs.add_header_inputs(&headers)
 }
 
-// v3_compiler_tells_its_headers reports whether a compiler driver that runs the
-// command `args` writes down every header that it reads when it is asked to: it
-// writes those of one source, so a command that compiles several is told by the
-// last of them only. `inputs` gets the reason when it does not.
+// compiler_tells_its_headers reports whether a compiler driver that compiles
+// `sources` in one command writes down every header that it reads when it is
+// asked to: it writes those of one source, so a command that compiles several is
+// told by the last of them only. `inputs` gets the reason when it does not.
 fn (mut inputs V3ProgramLinkInputs) compiler_tells_its_headers(sources []string) bool {
 	if sources.len > 1 && inputs.unknown.len == 0 {
 		inputs.unknown = 'the command compiles more than one source: ${sources.join(' ')}'

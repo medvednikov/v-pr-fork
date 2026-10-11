@@ -288,14 +288,17 @@ fn test_headers_that_a_compiler_read_are_inputs_of_its_executable() {
 	}
 	early.add_compiled_headers(&manager, build_dir, unit, search, time.utc().unix() - 10)
 	assert early.unknown.len > 0
-	// A header that appears where it would be found first is no input that is kept.
+	// What is kept is good while no header is where none was: the place where the
+	// header would be found first is one of them.
+	kept := os.read_file(os.join_path(manager.dir, records[0]))!
+	read := [header]
+	assert v3_header_inputs_of_record(kept, read, later) != none
+	assert v3_header_inputs_of_record(kept, [header, os.join_path(second, 'other.h')], later) == none
+	assert v3_header_inputs_of_record(kept.all_before_last('complete=1'), read, later) == none
 	os.mkdir_all(os.join_path(first, 'sub'))!
-	os.write_file(os.join_path(first, 'sub', 'answer.h'), 'static inline int answer(void) { return 42; }\n')!
-	mut shadowed := V3ProgramLinkInputs{
-		taken: true
-	}
-	shadowed.add_compiled_headers(&manager, build_dir, unit, search, time.utc().unix() - 10)
-	assert shadowed.unknown.len > 0
+	assert v3_header_inputs_of_record(kept, read, later) == none
+	os.rmdir(os.join_path(first, 'sub'))!
+	assert v3_header_inputs_of_record(kept, read, later) != none
 	// More than one source: the compiler writes down the headers of the last one.
 	mut several := V3ProgramLinkInputs{
 		taken: true

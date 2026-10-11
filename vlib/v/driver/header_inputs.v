@@ -35,7 +35,10 @@ mut:
 	identities    []string
 	missing       []string
 	mentions_time bool
-	unknown       string
+	// Whether a file is named by a path that is relative to the directory of the
+	// build and leaves it: what it names depends on where the output goes.
+	relative_paths bool
+	unknown        string
 }
 
 // v3_c_mentions_compile_time reports whether `text` spells a macro whose value is
@@ -311,6 +314,9 @@ fn v3_header_inputs_text(inputs &V3HeaderInputs) string {
 	if inputs.mentions_time {
 		out.writeln('mentions_time=1')
 	}
+	if inputs.relative_paths {
+		out.writeln('relative_paths=1')
+	}
 	for i, path in inputs.files {
 		out.writeln('file=${path}\t${inputs.identities[i]}')
 	}
@@ -325,6 +331,8 @@ fn v3_header_inputs_text(inputs &V3HeaderInputs) string {
 fn (mut inputs V3HeaderInputs) read_line(line string) bool {
 	if line == 'mentions_time=1' {
 		inputs.mentions_time = true
+	} else if line == 'relative_paths=1' {
+		inputs.relative_paths = true
 	} else if line.starts_with('file=') {
 		tab := line.last_index_u8(`\t`)
 		if tab <= 'file='.len {

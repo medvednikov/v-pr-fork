@@ -96,13 +96,18 @@ fn test_first_missing_path_is_the_first_component_that_is_absent() {
 fn test_preprocessed_files_are_those_of_the_line_markers() {
 	build_dir := '/build/dir'
 	preprocessed := '# 1 "${v3_tcc_prelude_input_name}"\n# 1 "<command line>" 1\n# 1 "/usr/include/a.h" 1\nint a;\n# 1 "generated.h" 1\nint g;\n# 1 "../shared/b.h" 1\n# 2 "/usr/include/a.h" 2\n'
-	files, of_the_build := v3_preprocessed_files(preprocessed, build_dir)
+	files, of_the_build, relative := v3_preprocessed_files(preprocessed, build_dir)
 	// The preprocessor names a file below the directory that it runs in relative to
-	// it: such a file is one that the build made for itself.
+	// it: such a file is one that the build made for itself. One that it names
+	// relative to that directory and that is elsewhere is a file by where the
+	// output goes.
 	assert files.sorted() == ['/build/shared/b.h', '/usr/include/a.h']
 	assert of_the_build == '/build/dir/generated.h'
-	plain, none_of_the_build := v3_preprocessed_files('# 1 "/usr/include/a.h" 1\n', build_dir)
+	assert relative
+	plain, none_of_the_build, plain_relative := v3_preprocessed_files('# 1 "/usr/include/a.h" 1\n',
+		build_dir)
 	assert plain == ['/usr/include/a.h'] && none_of_the_build == ''
+	assert !plain_relative
 }
 
 fn test_prelude_stamp_is_valid_while_its_inputs_are_what_they_were() {
