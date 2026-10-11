@@ -385,10 +385,10 @@ fn (mut decoder Decoder) decode_error(message string) ! {
 	}
 }
 
-// decode decodes a JSON string into a specified type.
-// By default, decoding is lenient. Use `strict: true` for strict JSON spec compliance.
+// decoder_for_text performs input validation and token allocation once in shared
+// code rather than specializing the same setup for every target type.
 @[manualfree]
-pub fn decode[T](val string, params DecoderOptions) !T {
+fn decoder_for_text(val string, params DecoderOptions) !Decoder {
 	if val == '' {
 		return JsonDecodeError{
 			message:   'empty string'
@@ -401,13 +401,23 @@ pub fn decode[T](val string, params DecoderOptions) !T {
 		strict:      params.strict
 		values_info: []ValueInfo{len: value_count_bound(val)}
 	}
+	decoder.check_json_format() or {
+		unsafe { decoder.values_info.free() }
+		return err
+	}
+	decoder.values_info.trim(decoder.values_len)
+	return decoder
+}
+
+// decode decodes a JSON string into a specified type.
+// By default, decoding is lenient. Use `strict: true` for strict JSON spec compliance.
+@[manualfree]
+pub fn decode[T](val string, params DecoderOptions) !T {
+	mut decoder := decoder_for_text(val, params)!
 	// Nothing that is decoded refers to values_info, so it is released right away.
 	defer {
 		unsafe { decoder.values_info.free() }
 	}
-
-	decoder.check_json_format()!
-	decoder.values_info.trim(decoder.values_len)
 	return decoder.decode_root[T]()
 }
 
@@ -773,31 +783,17 @@ fn (mut decoder Decoder) decode_struct_with_embeds[T](mut val T, struct_info Val
 // by all structs. That keeps the code generated for each struct small.
 @[manualfree]
 fn (mut decoder Decoder) decode_struct_fields[T](mut val T, struct_info ValueInfo) ! {
-	struct_end := struct_info.position + struct_info.length
 	field_info_cache := unsafe { decoder.cached_struct_field_infos[T]() }
-	mut decoded_mask := u64(0)
-	mut decoded_fields := []bool{}
-	if field_info_cache.field_infos.len > 64 {
-		decoded_fields = []bool{len: field_info_cache.field_infos.len}
-	}
+	mut state := struct_decode_state(field_info_cache.field_infos, struct_info.position + struct_info.length)
 	decoder.current_idx++
 
 	// json object loop
 	for {
-		field_idx := decoder.next_struct_field_idx(field_info_cache.field_infos, struct_end)!
+		field_idx := decoder.next_decoded_struct_field(mut state)!
 		if field_idx == struct_key_object_end {
 			break
 		}
-		if field_idx == struct_key_no_field {
-			continue
-		}
-		decoded_mask = mark_struct_field_decoded(decoded_mask, mut decoded_fields, field_idx)
 		field_info := field_info_cache.field_infos[field_idx]
-		if field_info.is_skip {
-			// Preserve the existing decode behavior for `skip`+`required`.
-			decoder.current_idx++
-			continue
-		}
 		mut i := 0
 		$for field in T.fields {
 			if field.attrs.contains('skip') {
@@ -817,8 +813,48 @@ fn (mut decoder Decoder) decode_struct_fields[T](mut val T, struct_info ValueInf
 		}
 	}
 
-	decoder.check_required_struct_fields_decoded(field_info_cache.field_infos, decoded_mask,
-		decoded_fields)!
+	decoder.check_required_struct_fields_decoded(field_info_cache.field_infos, state.decoded_mask,
+		state.decoded_fields)!
+}
+
+struct StructDecodeState {
+	field_infos []StructFieldInfo // Borrowed from the immutable per-type cache.
+	struct_end  int
+mut:
+	decoded_mask   u64
+	decoded_fields []bool
+}
+
+@[manualfree]
+fn struct_decode_state(field_infos []StructFieldInfo, struct_end int) StructDecodeState {
+	mut state := StructDecodeState{ field_infos: field_infos, struct_end: struct_end }
+	if field_infos.len > 64 {
+		state.decoded_fields = []bool{len: field_infos.len}
+	}
+	return state
+}
+
+// next_decoded_struct_field shares key skipping and required-field tracking among
+// all struct types. It returns only fields that need a typed value decoder.
+@[manualfree]
+fn (mut decoder Decoder) next_decoded_struct_field(mut state StructDecodeState) !int {
+	for {
+		field_idx := decoder.next_struct_field_idx(state.field_infos, state.struct_end)!
+		if field_idx == struct_key_object_end {
+			return field_idx
+		}
+		if field_idx == struct_key_no_field {
+			continue
+		}
+		state.decoded_mask = mark_struct_field_decoded(state.decoded_mask, mut state.decoded_fields, field_idx)
+		if state.field_infos[field_idx].is_skip {
+			// Preserve the existing decode behavior for `skip`+`required`.
+			decoder.current_idx++
+			continue
+		}
+		return field_idx
+	}
+	return struct_key_object_end
 }
 
 const struct_key_no_field = -1
