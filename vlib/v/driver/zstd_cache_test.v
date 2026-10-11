@@ -4,6 +4,7 @@ import os
 import v.gen.c as cgen
 import v.flat
 import v.modulecache
+import v.pref
 
 fn test_shipped_zstd_cache_owner_tracks_implementation() ! {
 	source := os.real_path(os.join_path(@VEXEROOT, 'thirdparty', 'zstd', 'zstd.c'))
@@ -71,4 +72,37 @@ fn test_logical_nested_native_configuration_override_is_not_default() {
 		assert !v3_native_file_has_default_mbedtls_context(path, [], @VEXEROOT, mut visited)
 		assert visited.len == 2
 	}
+}
+
+fn test_default_mbedtls_and_sibling_headers_have_tracked_preprocessing_context() {
+	$if windows {
+		return
+	}
+	root := @VEXEROOT
+	header := os.real_path(os.join_path(root, 'thirdparty', 'mbedtls', 'include', 'mbedtls', 'ctr_drbg.h'))
+	helper := os.real_path(os.join_path(root, 'vlib', 'net', 'mbedtls', 'mbedtls_threading.h'))
+	inputs := cgen.CacheNativeInputs{
+		native_paths:  {
+			header: true
+			helper: true
+		}
+		include_dirs:  [os.join_path(root, 'thirdparty', 'mbedtls', 'include')]
+		module_inputs: {
+			'mbedtls': [header, helper]
+		}
+	}
+	ast := flat.FlatAst.new()
+	mut prefs := pref.new_preferences()
+	prefs.vroot = root
+	expansion := v3_preprocess_bundled_mbedtls_headers(&inputs, ast, prefs, inputs.include_dirs.map('-I' + it), 'cc', true, '')
+	assert expansion.replicable
+	assert header in expansion.roots
+	assert helper in expansion.roots
+	assert header in expansion.paths
+	assert helper in expansion.paths
+	closure := v3_native_input_closure_with_mbedtls(&inputs, root, true, '', expansion)
+	assert closure.unassignable == ''
+	assert helper in closure.inputs['mbedtls']
+	custom := v3_preprocess_bundled_mbedtls_headers(&inputs, ast, prefs, ['-DMBEDTLS_CONFIG_FILE="custom.h"'], 'cc', true, '')
+	assert !custom.replicable
 }
