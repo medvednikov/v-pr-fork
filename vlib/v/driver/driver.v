@@ -4702,7 +4702,14 @@ fn v3_native_file_has_default_mbedtls_context(path string, include_dirs []string
 	visited[real_path] = true
 	if v3_is_bundled_mbedtls_header(real_path, vroot) { return true }
 	source := os.read_file(real_path) or { return false }
-	if v3_native_text_overrides_mbedtls(source) { return false }
+	mut guard_source := source
+	if real_path == os.real_path(os.join_path(vroot, 'thirdparty', 'zstd', 'zstd.c'))
+		&& v3_cache_native_input_has_program_owner(real_path, source, vroot) {
+		// The shipped ARM workaround restores inline immediately after this
+		// system include, so it cannot change later mbedTLS/SDK declarations.
+		guard_source = source.replace('#    define inline __inline__  /* circumvent a clang bug */\n#    include <arm_neon.h>\n#    undef inline', '#    include <arm_neon.h>')
+	}
+	if v3_native_text_overrides_mbedtls(guard_source) { return false }
 	for line in v3_native_directive_text(source).split_into_lines() {
 		if include_path := v3_parallel_local_include_path(line, os.dir(real_path), include_dirs) {
 			if !cgen.native_path_is_shipped(include_path, vroot) { return false }

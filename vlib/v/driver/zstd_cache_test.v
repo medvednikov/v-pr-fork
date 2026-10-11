@@ -12,6 +12,10 @@ fn test_shipped_zstd_cache_owner_tracks_implementation() ! {
 	assert v3_cache_native_input_has_program_owner(source, text, @VEXEROOT)
 	assert !v3_cache_native_input_has_program_owner(source, 'unrecognized source', @VEXEROOT)
 	assert !v3_cache_native_input_has_program_owner(os.join_path(@VEXEROOT, 'other.c'), text, @VEXEROOT)
+	// Its exact balanced ARM workaround does not persist into later headers.
+	assert v3_native_text_overrides_mbedtls(text)
+	mut visited := map[string]bool{}
+	assert v3_native_file_has_default_mbedtls_context(source, [], @VEXEROOT, mut visited)
 	inputs := cgen.CacheNativeInputs{
 		module_inputs: {
 			'zstd': [source]
