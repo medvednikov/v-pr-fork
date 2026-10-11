@@ -1,20 +1,22 @@
 module privlib
 
 pub struct Item {
+mut:
 	weight int
 pub mut:
 	count int
 }
 
 struct Hidden {
+mut:
 	a int
 pub mut:
 	b int
 }
 
 pub struct S {
-	secret int
 mut:
+	secret  int
 	counter int
 pub mut:
 	shown  int
