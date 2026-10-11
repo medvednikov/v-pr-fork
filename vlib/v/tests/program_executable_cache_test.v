@@ -558,6 +558,49 @@ fn test_libraries_of_the_link_are_inputs_of_the_executable() {
 		assert_restored(build(root, with_script, main_file, 'scripted_again'))
 	}
 
+	// A relative path of the link names a file by where the output goes: the C
+	// compiler runs in a directory beside the output. The same command with another
+	// output links another library.
+	make_answer_library(os.join_path(root, 'place_a', 'libs', 'libanswer.a'), 101, false)
+	make_answer_library(os.join_path(root, 'place_b', 'libs', 'libanswer.a'), 102, false)
+	mut with_relative := answer_flags.clone()
+	with_relative << ['-ldflags', '-L../libs -lanswer']
+	assert_rebuilt(build(root, with_relative, main_file, 'place_a/out'))
+	assert run_built(root, 'place_a/out') == '101'
+	assert_restored(build(root, with_relative, main_file, 'place_a/out'))
+	other_place := build(root, with_relative, main_file, 'place_b/out')
+	assert !restored(other_place), other_place
+	assert run_built(root, 'place_b/out') == '102'
+	assert_restored(build(root, with_relative, main_file, 'place_b/out'))
+	make_answer_library(os.join_path(root, 'place_b', 'libs', 'libanswer.a'), 103, false)
+	relative_replaced := build(root, with_relative, main_file, 'place_b/out')
+	assert !restored(relative_replaced), relative_replaced
+	assert run_built(root, 'place_b/out') == '103'
+
+	// The path of an output can hold a comma, at which a compiler driver takes an
+	// argument for the linker apart.
+	os.mkdir_all(os.join_path(root, 'with,comma'))!
+	assert_rebuilt(build(root, with_option, main_file, 'with,comma/out'))
+	assert run_built(root, 'with,comma/out') == '42'
+
+	// A command that asks its linker for a report gets the one that it asks for.
+	own_report := os.join_path(root, 'own_report')
+	own_option := if os.user_os() == 'macos' {
+		'-Wl,-dependency_info,${own_report}'
+	} else {
+		'-Wl,--dependency-file=${own_report}'
+	}
+	if os.exec(['cc', own_option, '-o', os.join_path(root, 'own_probe'), os.join_path(os.dir(direct),
+		'answer_42.c'), '-shared']).exit_code == 0 {
+		os.rm(own_report) or {}
+		mut with_report := with_option.clone()
+		with_report[with_report.len - 1] += ' ${own_option}'
+		assert_rebuilt(build(root, with_report, main_file, 'own_report_build'))
+		assert run_built(root, 'own_report_build') == '42'
+		assert os.file_size(own_report) > 0
+		assert_restored(build(root, with_report, main_file, 'own_report_same'))
+	}
+
 	// A thin archive names its members: what the link reads is another file.
 	thin := os.join_path(root, 'thin_library', 'libanswer.a')
 	if make_answer_library(thin, 61, true) {

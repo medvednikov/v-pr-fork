@@ -4306,6 +4306,19 @@ fn v3_program_executable_link_signature(link_ld_flags []string, links_with_tcc b
 		build_options.join('\x00'), v3_link_environment_signature()].join('\x01')
 }
 
+// v3_flags_name_relative_paths reports whether one of `flags` holds a relative
+// path that leaves the directory that it is relative to, as `-L../libs` does. The
+// C compiler runs in a directory beside the output, so such a path names another
+// file for another output.
+fn v3_flags_name_relative_paths(flags []string) bool {
+	for flag in flags {
+		if flag.contains('../') || flag.ends_with('..') {
+			return true
+		}
+	}
+	return false
+}
+
 // v3_files_keep_identities reports whether every file still is the file that
 // `identities` describe, which is their metadata from before they were read. A file
 // that was saved while the build ran is not the one that the build parsed, and
@@ -11952,6 +11965,15 @@ pub fn run(args []string) {
 		program_compile_values << '${name}=${value}'
 	}
 	program_compile_values.sort()
+	// A flag with a relative path that leaves the directory of the build names a
+	// file by where the output goes: the executable is kept for that directory then.
+	program_executable_output_dir := if v3_flags_name_relative_paths(link_ld_flags)
+		|| v3_flags_name_relative_paths(cache_c_flags)
+		|| v3_flags_name_relative_paths(v3_link_environment_names.map(os.getenv(it))) {
+		os.real_path(if os.dir(bin_file).len > 0 { os.dir(bin_file) } else { os.getwd() })
+	} else {
+		''
+	}
 	program_executable_link := v3_program_executable_link_signature(link_ld_flags, cache_with_tcc, [
 		'strict=${is_strict}',
 		'no_std=${no_std}',
@@ -11960,6 +11982,7 @@ pub fn run(args []string) {
 		'no_preludes=${no_preludes}',
 		'explicit_mutability=${!disable_explicit_mutability}',
 		'values=${program_compile_values.join(',')}',
+		'output_dir=${program_executable_output_dir}',
 	])
 	mut program_executable_input := V3CgenCacheInput{}
 	mut program_executable_input_ready := false
@@ -15072,14 +15095,21 @@ pub fn run(args []string) {
 					// those of one source only.
 					cc_args << ['-MD', '-MF', v3_program_dependency_file]
 				}
-				// The linker tells what it read, where it can.
-				linker_report := if program_executable_enabled && !is_o && !is_shared {
-					v3_linker_report(&cache_state.manager, c_compiler, v3_link_search_args(cc_args),
-						prefs.normalized_target_os(), cc_dir)
-				} else {
-					V3LinkerReport.no_report
+				// The linker tells what it read, where it can. A command that asks its
+				// linker for a report already gets the one that it asks for.
+				mut linker_report := V3LinkerReport.no_report
+				mut linker_report_file := v3_linker_report_file
+				mut asked_for_linker_report := []string{}
+				if program_executable_enabled && !is_o && !is_shared {
+					linker_report, linker_report_file = v3_requested_linker_report(cc_args)
+					if linker_report == .no_report {
+						linker_report = v3_linker_report(&cache_state.manager, c_compiler, v3_link_search_args(cc_args),
+							prefs.normalized_target_os(), cc_dir)
+						linker_report_file = v3_linker_report_file
+						asked_for_linker_report = v3_linker_report_args(linker_report)
+						cc_args << asked_for_linker_report
+					}
 				}
-				cc_args << v3_linker_report_args(linker_report, cc_dir)
 				if verbose || show_cc {
 					println('  > ${cmdexec.display(c_compiler, cc_args)}')
 				}
@@ -15094,8 +15124,27 @@ pub fn run(args []string) {
 						}), cc_dir)
 				}
 				result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
+				if result.exit_code != 0 && asked_for_linker_report.len > 0
+					&& v3_output_names_unknown_option(linker_report, result.output) {
+					// The linker of this command is another one than the one that was
+					// asked which report it gives: the command runs without the option,
+					// and the answer is taken back.
+					v3_forget_linker_report(&cache_state.manager, c_compiler, v3_link_search_args(cc_args),
+						prefs.normalized_target_os())
+					cc_args = cc_args.filter(it !in asked_for_linker_report)
+					linker_report = .no_report
+					result = cmdexec.run_in(c_compiler, cc_args, cc_dir)
+				}
 				if result.exit_code == 0 && program_link_inputs.taken {
-					program_link_inputs.add_linker_report(linker_report, cc_dir, before_cc)
+					program_link_inputs.add_linker_report(linker_report, if os.is_abs_path(linker_report_file) {
+						linker_report_file
+					} else {
+						os.join_path(cc_dir, linker_report_file)
+					}, cc_dir, before_cc, if prefs.normalized_target_os() == 'macos' {
+						[macos_sdk_root_cache.get()].filter(it.len > 0)
+					} else {
+						[]string{}
+					})
 				}
 				// A command that links what earlier commands compiled reads no header.
 				if result.exit_code == 0 && cc_sources.len > 0
@@ -15222,6 +15271,12 @@ Please install the corresponding development package/libraries and make sure the
 		if program_executable_enabled && program_link_inputs.taken
 			&& v3_files_keep_identities(user_files, user_file_identities)
 			&& prepare_v3_cache_external_inputs(mut cache_state, &native_inputs, &native_closure) {
+			if program_link_inputs.relative_paths && program_executable_output_dir.len == 0
+				&& program_link_inputs.unknown.len == 0 {
+				// What such a path names depends on where the output goes, and that
+				// is no part of what this executable is kept for.
+				program_link_inputs.unknown = 'an input is named relative to the directory of the output'
+			}
 			if !program_executable_input_ready {
 				program_executable_input = v3_cgen_cache_input(cache_state, user_files, cache_c_flags)
 			}

@@ -581,12 +581,19 @@ is added to what the command shows: `-dependency_info` of Apple's linker, `--dep
 of GNU ld, gold, LLD and mold, found out once for a module cache by linking an empty program.
 The libraries and start files that a compiler driver adds by itself (`libc`, `libgcc`,
 `crt1.o`, `libSystem`) are inputs then. Apple's linker also tells every path where it looked
-for a file in vain, which is the whole of the link: an option that is not known is no reason
-to keep no executable there. The command of the linker is read in the order of the
-compiler's: an option takes the value that follows it, however the two were given
-(`-Wl,-rpath /dir`). A relative path is one of the directory in which the command runs, which
-the build makes for itself; one that leaves that directory (`-L../libs`,
-`-fprofile-use=../default.profdata`) is followed like an absolute one. The copy in the
+for a file in vain: with that, and with the files that the command gives an option, an option
+that is not known is no reason to keep no executable there. What the linker takes from deep
+inside an SDK, and where it finds nothing in one, is not recorded file by file. A command that
+asks its linker for such a report already gets the one that it asks for, and the driver reads
+that; a linker that turns out not to know the option is run again without it. The command of the
+linker is read in the order of the compiler's: an option takes the value that follows it,
+however the two were given (`-Wl,-rpath /dir`). A relative path is one of the directory in which
+the command runs, which the build makes for itself; one that leaves that directory (`-L../libs`,
+`-fprofile-use=../default.profdata`) is followed like an absolute one. That directory is
+beside the output, so such a path names another file for another output: an executable is
+kept for the directory of its output when a flag or the environment holds one, and none is
+kept when a relative path turns up that no flag showed. A specs file (`-specs`) tells the
+driver what to link, and no executable is kept of a command with one. The copy in the
 cache is a file of its own: changing or removing the output changes nothing there, and an
 executable that is restored gets the permissions that the umask of the caller leaves, as a
 linked one does. Builds that leave more than an executable behind run in

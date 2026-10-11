@@ -256,6 +256,48 @@ fn test_program_link_inputs_find_what_a_relative_path_names_outside_the_build() 
 		'', []string{}, '').unknown.len > 0
 }
 
+fn test_program_link_inputs_tell_what_only_the_place_of_the_output_names() {
+	root := link_inputs_fixture('program_link_output_place')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	build_dir := os.join_path(root, 'out.v3cc')
+	frameworks := os.join_path(root, 'Frameworks', 'Kit.framework')
+	os.mkdir_all(build_dir)!
+	os.mkdir_all(frameworks)!
+	os.write_file(os.join_path(frameworks, 'Kit'), '!<arch>\nkit')!
+	// A relative path that leaves the directory of the build names a file by
+	// where the output goes: the executable must be kept for that place.
+	relative := v3_program_link_inputs(['-o', 'out', 'src.c', '-F../Frameworks', '-framework',
+		'Kit'],
+		'', []string{}, build_dir)
+	assert relative.unknown == ''
+	assert relative.files == [os.join_path(frameworks, 'Kit')]
+	assert os.join_path(frameworks, 'Kit.tbd') in relative.missing
+	assert relative.relative_paths
+	absolute := v3_program_link_inputs(['-o', 'out', 'src.c', '-F${os.dir(frameworks)}', '-framework',
+		'Kit'], '', []string{}, build_dir)
+	assert absolute.files == relative.files
+	assert !absolute.relative_paths
+	assert v3_flags_name_relative_paths(['-O2', '-L../libs'])
+	assert v3_flags_name_relative_paths(['-fprofile-use=../../p.profdata', '-lm'])
+	assert v3_flags_name_relative_paths(['-I', '..'])
+	assert !v3_flags_name_relative_paths(['-L/abs/libs', '-lm', '-Wl,-rpath,/x', '-DV=1..2x'])
+	// A specs file tells the driver what to link with: nothing is kept of that.
+	for args in [['-specs', '/abs/my.specs'], ['-specs=/abs/my.specs'], ['--specs=/abs/my.specs']] {
+		mut command := ['-o', 'out', 'src.c']
+		command << args
+		assert v3_program_link_inputs(command, '', []string{}, build_dir).unknown.contains('specs'), args.str()
+	}
+	// What an option that is not known is given may be a file that it reads.
+	list := os.join_path(root, 'symbols.list')
+	os.write_file(list, '_answer\n')!
+	given := v3_program_link_inputs(['-o', 'out', 'src.c', '-Wl,--made-up-list=${list}'], '',
+		[]string{}, build_dir)
+	assert given.unknown == '' && given.unknown_option.len > 0
+	assert given.files == [list]
+}
+
 fn test_an_argument_of_the_driver_is_told_from_one_that_it_hands_to_the_linker() {
 	assert v3_compiler_option_values('-iframework') == 1
 	assert v3_compiler_option_values('-sectcreate') == 3
@@ -414,21 +456,50 @@ fn test_linker_report_is_read_in_both_of_its_forms() {
 	}
 	assert read == ['/usr/lib/crt1.o', '/tmp/cc1.o', '/libs/libanswer.a', '/usr/lib/libc.so']
 	assert none_missing == []
-	assert v3_linker_report_args(.dependency_info, '/build') == [
-		'-Wl,-dependency_info,/build/${v3_linker_report_file}',
+	// The report is named relative to the directory that the linker runs in: a
+	// compiler driver takes an argument for the linker apart at each comma, and
+	// the path of a directory can hold one.
+	assert v3_linker_report_args(.dependency_info) == [
+		'-Wl,-dependency_info,${v3_linker_report_file}',
 	]
-	assert v3_linker_report_args(.dependency_file, '/build') == [
-		'-Wl,--dependency-file=/build/${v3_linker_report_file}',
+	assert v3_linker_report_args(.dependency_file) == [
+		'-Wl,--dependency-file=${v3_linker_report_file}',
 	]
-	assert v3_linker_report_args(.no_report, '/build') == []
+	assert v3_linker_report_args(.no_report) == []
 	// The arguments that ask for the report name no input themselves.
 	for report in [V3LinkerReport.dependency_info, .dependency_file] {
 		mut command := ['-o', 'out', 'src.c']
-		command << v3_linker_report_args(report, '/build')
+		command << v3_linker_report_args(report)
 		asked := v3_program_link_inputs(command, '', []string{}, '/build')
 		assert asked.reason() == ''
 		assert asked.files == []
+		// A command that asks for a report is not asked for another.
+		requested, file := v3_requested_linker_report(command)
+		assert requested == report && file == v3_linker_report_file
 	}
+	for args, expected in {
+		'-Wl,-dependency_info,/tmp/user.bin':               V3LinkerReport.dependency_info
+		'-Xlinker -dependency_info -Xlinker /tmp/user.bin': V3LinkerReport.dependency_info
+		'-Wl,--dependency-file=/tmp/user.bin':              V3LinkerReport.dependency_file
+		'-Wl,--dependency-file,/tmp/user.bin':              V3LinkerReport.dependency_file
+		'-Wl,--as-needed -L/tmp -lm':                       V3LinkerReport.no_report
+		'-MF dependency-file=x -o dependency_info':         V3LinkerReport.no_report
+	} {
+		requested, file := v3_requested_linker_report(args.split(' '))
+		assert requested == expected, args
+		assert file == if expected == .no_report { '' } else { '/tmp/user.bin' }, args
+	}
+	// A linker that does not know the option says which one.
+	assert v3_output_names_unknown_option(.dependency_file, "/usr/bin/ld: unrecognized option '--dependency-file=x'\ncollect2: error: ld returned 1")
+	assert v3_output_names_unknown_option(.dependency_info, 'ld: unknown options: -dependency_info')
+	assert !v3_output_names_unknown_option(.dependency_file, 'ld: cannot open dependency file x: No space left on device')
+	assert !v3_output_names_unknown_option(.dependency_file, 'ld: unknown options: -dependency_info')
+	assert !v3_output_names_unknown_option(.no_report, 'ld: unknown options: -dependency_info')
+	// What takes the libraries of a program away is no part of the question.
+	assert v3_linker_probe_args(['-fuse-ld=lld', '-static', '-nostdlib', '-m64']) == [
+		'-fuse-ld=lld',
+		'-m64',
+	]
 }
 
 fn test_linker_report_adds_what_the_linker_found_by_itself() {
@@ -474,8 +545,9 @@ fn test_linker_report_adds_what_the_linker_found_by_itself() {
 			unknown_option: 'the linker option `-no_order_inits` is not one whose inputs are known'
 		}
 	}
+	report_file := os.join_path(build_dir, v3_linker_report_file)
 	mut inputs := new_inputs()
-	inputs.add_linker_report(.dependency_info, build_dir, later)
+	inputs.add_linker_report(.dependency_info, report_file, build_dir, later, []string{})
 	assert inputs.unknown == ''
 	// The linker told where it found nothing: the option that is not known here
 	// read nothing that the report does not hold.
@@ -492,7 +564,7 @@ fn test_linker_report_adds_what_the_linker_found_by_itself() {
 	// besides is not known.
 	os.write_file(os.join_path(build_dir, v3_linker_report_file), 'out: ${named} ${implicit}\n')!
 	mut ruled := new_inputs()
-	ruled.add_linker_report(.dependency_file, build_dir, later)
+	ruled.add_linker_report(.dependency_file, report_file, build_dir, later, []string{})
 	assert ruled.unknown == ''
 	assert ruled.files == [named, implicit]
 	assert ruled.unknown_option.len > 0
@@ -500,23 +572,48 @@ fn test_linker_report_adds_what_the_linker_found_by_itself() {
 	// one that it read.
 	write_report([named, implicit], []string{})
 	mut early := new_inputs()
-	early.add_linker_report(.dependency_info, build_dir, time.utc().unix() - 10)
+	early.add_linker_report(.dependency_info, report_file, build_dir, time.utc().unix() - 10,
+		[]string{})
 	assert early.unknown.contains('libimplicit.tbd')
+	// The linker names what it found through a relative directory relative to the
+	// directory that it runs in: such a file is one by where the output goes.
+	write_report([named, '../libimplicit.tbd', 'src.o'], ['../first/libnamed.a', 'first/libnamed.a'])
+	mut relative := new_inputs()
+	relative.add_linker_report(.dependency_info, report_file, build_dir, later, []string{})
+	assert relative.unknown == ''
+	assert relative.files == [named, implicit]
+	assert relative.missing == [absent]
+	assert relative.relative_paths
+	assert !inputs.relative_paths
+	// What the linker takes from deep inside an SDK, and where it finds nothing in
+	// one, comes and goes with the files that it names there.
+	sdk := os.join_path(root, 'sdk')
+	member := os.join_path(sdk, 'usr', 'lib', 'system', 'libsystem_c.tbd')
+	system := os.join_path(sdk, 'usr', 'lib', 'libSystem.tbd')
+	os.mkdir_all(os.dir(member))!
+	os.write_file(member, '--- !tapi-tbd')!
+	os.write_file(system, '--- !tapi-tbd')!
+	write_report([named, system, member], [absent, os.join_path(sdk, 'usr', 'lib', 'libcache.dylib')])
+	mut with_sdk := new_inputs()
+	with_sdk.add_linker_report(.dependency_info, report_file, build_dir, later, [sdk])
+	assert with_sdk.unknown == ''
+	assert with_sdk.files == [named, system]
+	assert with_sdk.missing == [absent]
 	// A linker that was asked and wrote nothing leaves no executable behind.
-	os.rm(os.join_path(build_dir, v3_linker_report_file))!
+	os.rm(report_file)!
 	mut silent := new_inputs()
-	silent.add_linker_report(.dependency_info, build_dir, later)
+	silent.add_linker_report(.dependency_info, report_file, build_dir, later, []string{})
 	assert silent.unknown.contains('did not tell')
 	mut unasked := new_inputs()
-	unasked.add_linker_report(.no_report, build_dir, later)
-	assert unasked.unknown == '' && unasked.unknown_option.len > 0
+	unasked.add_linker_report(.no_report, report_file, build_dir, later, []string{})
+	assert unasked.unknown == ''
+	assert unasked.unknown_option.len > 0
 }
 
 fn test_linker_is_asked_once_which_report_it_gives() {
 	$if windows {
 		return
 	}
-	compiler := os.find_abs_path_of_executable('cc') or { return }
 	root := link_inputs_fixture('linker_report_probe')
 	defer {
 		os.rmdir_all(root) or {}
@@ -524,35 +621,60 @@ fn test_linker_is_asked_once_which_report_it_gives() {
 	build_dir := os.join_path(root, 'build')
 	os.mkdir_all(build_dir)!
 	manager := modulecache.new_manager(os.join_path(root, 'cache'), 'salt', true, '', '')
-	report := v3_linker_report(&manager, compiler, []string{}, os.user_os(), build_dir)
-	$if macos {
-		assert report == .dependency_info
+	answers := fn [manager] () []string {
+		mut kept := []string{}
+		for name in os.ls(manager.dir) or { []string{} } {
+			if name.starts_with('linker_report_') {
+				kept << os.read_file(os.join_path(manager.dir, name)) or { '' }
+			}
+		}
+		kept.sort()
+		return kept
 	}
-	records := os.ls(manager.dir)!.filter(it.starts_with('linker_report_'))
+	// A linker that writes the report: a compiler that writes it in its place, and
+	// that leaves a line for each time that it runs.
+	writing := os.join_path(root, 'writing-cc')
+	runs := os.join_path(root, 'runs')
+	os.write_file(writing, '#!/bin/sh\necho run >> ${runs}\necho report > ${v3_linker_report_file}\nexit 0\n')!
+	os.chmod(writing, 0o755)!
+	expected := if os.user_os() == 'macos' {
+		V3LinkerReport.dependency_info
+	} else {
+		V3LinkerReport.dependency_file
+	}
+	assert v3_linker_report(&manager, writing, []string{}, os.user_os(), build_dir) == expected
+	assert answers() == ['yes\n']
 	// Nothing of the question is left in the directory of the build.
 	assert os.ls(build_dir)! == []
-	if report != .no_report {
-		assert records.len == 1
-		assert os.read_file(os.join_path(manager.dir, records[0]))! == 'yes\n'
-		// The answer is read back: a compiler that is not there is not run.
-		os.rmdir_all(build_dir)!
-		os.mkdir_all(build_dir)!
-		assert v3_linker_report(&manager, compiler, []string{}, os.user_os(), build_dir) == report
-	}
-	// A linker that does not know the option says so, and is not asked again; a
-	// compiler that fails for another reason is.
+	// The answer is read back: the compiler is not run again.
+	assert v3_linker_report(&manager, writing, []string{}, os.user_os(), build_dir) == expected
+	assert os.read_lines(runs)!.len == 1
+	// A linker that does not know the option says so, and is not asked again.
 	refusing := os.join_path(root, 'refusing-cc')
-	os.write_file(refusing, '#!/bin/sh\necho "ld: unknown options: -dependency_info --dependency-file" >&2\nexit 1\n')!
+	os.write_file(refusing, '#!/bin/sh\necho "ld: unknown options: -dependency_info" >&2\necho "ld: unrecognized option --dependency-file" >&2\nexit 1\n')!
 	os.chmod(refusing, 0o755)!
 	assert v3_linker_report(&manager, refusing, []string{}, os.user_os(), build_dir) == .no_report
+	assert answers() == ['no\n', 'yes\n']
+	// A compiler that fails for another reason is asked the next time.
 	failing := os.join_path(root, 'failing-cc')
-	os.write_file(failing, '#!/bin/sh\necho "cc: no space left on device" >&2\nexit 1\n')!
+	os.write_file(failing, '#!/bin/sh\necho "ld: cannot open dependency file: No space left on device" >&2\nexit 1\n')!
 	os.chmod(failing, 0o755)!
 	assert v3_linker_report(&manager, failing, []string{}, os.user_os(), build_dir) == .no_report
-	kept := os.ls(manager.dir)!.filter(it.starts_with('linker_report_')).map(os.read_file(os.join_path(manager.dir,
-		it)) or { '' })
-	assert kept.filter(it == 'no\n').len == 1
-	assert kept.len == records.len + 1
+	assert answers() == ['no\n', 'yes\n']
+	// A link that fails over the option takes a kept answer back.
+	v3_forget_linker_report(&manager, writing, []string{}, os.user_os())
+	assert answers() == ['no\n', 'no\n']
+	assert v3_linker_report(&manager, writing, []string{}, os.user_os(), build_dir) == .no_report
+	assert os.read_lines(runs)!.len == 1
+	// The linker of the system gives the report that it is asked for, or none.
+	if compiler := os.find_abs_path_of_executable('cc') {
+		real := v3_linker_report(&manager, compiler, []string{}, os.user_os(), build_dir)
+		assert real in [expected, .no_report]
+		$if macos {
+			assert real == .dependency_info
+		}
+		assert os.ls(build_dir)! == []
+	}
 }
 
 fn test_library_search_dirs_are_read_from_what_a_compiler_prints() {
