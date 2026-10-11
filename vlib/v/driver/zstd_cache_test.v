@@ -57,13 +57,15 @@ fn test_native_config_override_logical_directives() {
 }
 
 fn test_preprocessed_sdk_inline_annotation_preserves_replication_guards() {
-	helper := 'inline __attribute__ ((__always_inline__)) int helper(int value) { return value + 1; }'
+	helper := 'inline __attribute__ ((__always_inline__)) int __sputc(int value) { return value + 1; }'
 	assert !modulecache.c_source_is_replicable(helper)
 	assert modulecache.c_source_is_replicable(v3_native_preprocessed_declarations_for_replication(helper))
-	for source in ['extern ' + helper,
-		'inline __attribute__((gnu_inline)) int helper(int value) { return value; }',
-		'__inline__ __attribute__((__gnu_inline__)) int helper(int value) { return value; }',
-		'inline __attribute__((always_inline)) int helper(int value) { static int count; return count + value; }',
+	for source in ['extern ' + helper, 'int __sputc(int value);\n' + helper,
+		helper + '\nint __sputc(int value);',
+		'inline __attribute__((always_inline)) int helper(int value) { return value; }',
+		'inline __attribute__((gnu_inline)) int __sputc(int value) { return value; }',
+		'__inline__ __attribute__((__gnu_inline__)) int __sputc(int value) { return value; }',
+		'inline __attribute__((always_inline)) int __sputc(int value) { static int count; return count + value; }',
 		'__attribute__((always_inline)) int helper(int value) { return value; }',
 		'int counter __attribute__((aligned(16))) = 1;',
 		'static void (*callback)(void) __attribute__((used));'] {

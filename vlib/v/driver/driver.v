@@ -4589,14 +4589,19 @@ fn v3_split_native_declaration_lines(source string) string {
 	return out.str()
 }
 
-// Only use this after preprocessing has resolved attribute macros. C11 SDK
-// helpers carry a pure optimization annotation that the literal scanner omits.
-// Preserve other attributes, including GNU inline's external-symbol semantics.
+// Only use this after preprocessing has resolved attribute macros. The macOS
+// SDK's __sputc C11 helper carries a pure optimization annotation. A separate
+// declaration can change inline linkage, so require its sole source occurrence.
+// Preserve all other attributed helpers and GNU inline's external semantics.
 fn v3_native_preprocessed_declarations_for_replication(source string) string {
 	mut declarations := v3_split_native_declaration_lines(source)
+	if source.split('__sputc').len != 2 {
+		return declarations
+	}
 	for annotation in ['__attribute__ ((__always_inline__))', '__attribute__((__always_inline__))',
 		'__attribute__ ((always_inline))', '__attribute__((always_inline))'] {
-		declarations = declarations.replace(annotation, '')
+		head := 'inline ${annotation} int __sputc('
+		declarations = declarations.replace(head, 'inline int __sputc(')
 	}
 	return declarations
 }
