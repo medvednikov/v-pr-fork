@@ -1,0 +1,15 @@
+# Native inputs in the module cache
+
+With `-new-compiler -cc cc`, applications importing `compress.zstd`, including `veb`
+applications, can use the module and program caches. Cached module objects share one
+copy of V's bundled zstd implementation in the program translation unit. Other units
+use the public declarations embedded in the bundled amalgamation. Changes to the
+native source remain cache inputs and invalidate affected entries. Bundled mbedTLS
+headers are checked with the selected C preprocessor and their active dependencies
+are tracked. Custom mbedTLS/PSA configuration directives and forced headers keep
+the conservative fallback when their original context cannot be reconstructed.
+
+Set `V3_CACHE_TRACE=1` to inspect cache decisions, and use `-show-timings` to see
+`monomorphize (cached)` on an unchanged build. External native inputs without a safe
+ownership or replication policy still fall back to an uncached build. TCC selection
+continues to follow the compiler's existing cache eligibility rules.
