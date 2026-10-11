@@ -6,6 +6,7 @@
 module image
 
 import io
+import os
 
 // err_format indicates that decoding encountered an unknown format.
 pub const err_format = 'image: unknown format'
@@ -133,7 +134,7 @@ fn match_magic(magic string, b []u8) bool {
 fn sniff(mut r PeekReader) !Format {
 	for f in registered_formats {
 		b := r.peek(f.magic.len) or {
-			if err is io.Eof {
+			if err is io.Eof || err is os.Eof {
 				continue
 			}
 			return err

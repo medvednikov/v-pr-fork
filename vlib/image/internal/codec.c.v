@@ -3,6 +3,7 @@ module internal
 import image
 import image.color
 import io
+import os
 import stbi
 
 #include "stb_image_write.h"
@@ -27,7 +28,7 @@ fn read_encoded(reader io.Reader, magic string) ![]u8 {
 	mut chunk := []u8{len: 16 * 1024}
 	for {
 		n := r.read(mut chunk) or {
-			if err is io.Eof {
+			if err is io.Eof || err is os.Eof {
 				break
 			}
 			return err

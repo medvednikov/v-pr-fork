@@ -5,6 +5,7 @@ import image.draw
 import image.jpeg
 import image.png
 import io
+import os
 
 struct CodecReader {
 	bytes []u8
@@ -102,6 +103,31 @@ fn test_registered_codecs_propagate_reader_errors() {
 		} else {
 			assert err.msg() == 'codec reader failure'
 		}
+	}
+}
+
+fn test_codecs_decode_files() {
+	src := image.new_nrgba(image.rect(0, 0, 1, 1))
+	for format in ['png', 'jpeg'] {
+		bytes := if format == 'png' {
+			png.encode_to_bytes(src)!
+		} else {
+			jpeg.encode_to_bytes(src)!
+		}
+		path := os.join_path(os.temp_dir(), 'v_image_codec_${format}_${os.getpid()}')
+		os.write_file_array(path, bytes)!
+		defer { os.rm(path) or {} }
+		mut file := os.open(path)!
+		decoded, name := image.decode(file)!
+		file.close()
+		assert name == format
+		assert decoded.bounds() == src.bounds()
+		file = os.open(path)!
+		config, config_name := image.decode_config(file)!
+		file.close()
+		assert config_name == format
+		assert config.width == 1
+		assert config.height == 1
 	}
 }
 
