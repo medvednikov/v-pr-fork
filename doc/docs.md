@@ -1582,6 +1582,9 @@ users.sort_with_compare(custom_sort_fn)
 
 #### Array Slices
 
+Iteration over an array slice keeps the array's element type: iterating `[]string` yields
+strings, including when the containing function is reached through generic calls.
+
 A slice is a part of a parent array. Initially it refers to the elements
 between two indices separated by a `..` operator. The right-side index must
 be greater than or equal to the left side index.
