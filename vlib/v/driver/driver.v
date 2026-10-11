@@ -13317,7 +13317,12 @@ pub fn run(args []string) {
 			}
 			if compiler_errors.json_output() {
 				for message in monomorph_errors {
-					eprintln(compiler_errors.json_message('error:', message, []string{}))
+					// Located compile-time errors are encoded during transformation.
+					if message.starts_with('{"file":') || message.starts_with('{"severity":') {
+						eprintln(message)
+					} else {
+						eprintln(compiler_errors.json_message('error:', message, []string{}))
+					}
 				}
 				exit(1)
 			}

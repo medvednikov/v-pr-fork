@@ -21669,7 +21669,14 @@ fn (mut t Transformer) record_selected_compile_error_call(node flat.Node) {
 	} else {
 		'compile-time error'
 	}
-	t.record_monomorph_error(errors.formatted_error('error:', 'compile-time error: ${message}', t.a, flat.empty_node, node.pos))
+	diagnostic := if errors.json_output() {
+		errors.json_error('error:', 'compile-time error: ${message}', []string{}, t.a,
+			flat.empty_node, node.pos)
+	} else {
+		errors.formatted_error('error:', 'compile-time error: ${message}', t.a, flat.empty_node,
+			node.pos)
+	}
+	t.record_monomorph_error(diagnostic)
 }
 
 // is_disabled_fn_name reports whether is disabled fn name applies in transform.
