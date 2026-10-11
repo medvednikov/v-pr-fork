@@ -47,6 +47,7 @@ fn test_native_config_override_logical_directives() {
 	assert v3_native_text_overrides_mbedtls('#undef PSA_WANT_ALG_SHA_256')
 	assert v3_native_text_overrides_mbedtls('/* context */ #define MBEDTLS_CONFIG_FILE "custom.h"')
 	assert !v3_native_text_overrides_mbedtls('#define OTHER_CONFIG "custom.h"')
+	assert !v3_native_text_overrides_mbedtls('#define V_MBEDTLS_HELPERS_H\nmbedtls_ssl_context* context;')
 	mut ast := flat.FlatAst.new()
 	ast.add_node(flat.Node{ kind: .directive, value: 'define', typ: 'MBEDTLS_CONFIG_FILE "custom.h"' })
 	assert !v3_mbedtls_default_header_context(&ast, [])

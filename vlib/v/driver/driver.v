@@ -4585,10 +4585,17 @@ fn v3_split_native_declaration_lines(source string) string {
 }
 
 // A sibling input can hide directives behind comments or macro continuations.
-// Conservatively keep any reference to configuration names on the old fallback.
+// Type references and V's own helper include guards do not override configuration.
 fn v3_native_text_overrides_mbedtls(source string) bool {
-	spliced := source.replace('\\\n', '').replace('\\\r\n', '')
-	return spliced.contains('MBEDTLS_') || spliced.contains('PSA_')
+	for line in v3_native_directive_text(source).split_into_lines() {
+		trimmed := line.trim_space()
+		if !trimmed.starts_with('#') { continue }
+		parts := trimmed[1..].trim_space().fields()
+		if parts.len >= 2 && parts[0] in ['define', 'undef'] && (parts[1].starts_with('MBEDTLS_') || parts[1].starts_with('PSA_')) {
+			return true
+		}
+	}
+	return false
 }
 
 // Inspect logical C directives without changing the literal expansion cache.
