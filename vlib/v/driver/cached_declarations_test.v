@@ -526,17 +526,61 @@ fn stage_built_name_patterns() []string {
 	return sorted
 }
 
+// plain_functions_of_vlib returns the plain functions of every module of vlib,
+// each with the last part of the name of its module, but for the directories in
+// `except`.
+fn plain_functions_of_vlib(except []string) [][]string {
+	vlib := os.join_path(@VMODROOT, 'vlib')
+	mut dirs := map[string]bool{}
+	for file in os.walk_ext(vlib, '.v') {
+		dirs[os.dir(file)] = true
+	}
+	mut functions := [][]string{}
+	for dir, _ in dirs {
+		relative := dir[vlib.len + 1..]
+		if relative in except || relative.contains('tests') || relative.contains('testdata') {
+			continue
+		}
+		module_name := relative.all_after_last('/')
+		for name in plain_functions_of(dir) {
+			functions << [module_name, name]
+		}
+	}
+	return functions
+}
+
+// stage_built_function_name_patterns returns the names that the stages put
+// together and that a plain function of vlib has: the others are names of
+// something else.
+fn stage_built_function_name_patterns() []string {
+	functions := plain_functions_of_vlib([]string{})
+	mut fitting := []string{}
+	for text in stage_built_name_patterns() {
+		pattern := v3_name_pattern(text)
+		for function in functions {
+			if pattern.fits(function[0], function[1]) {
+				fitting << text
+				break
+			}
+		}
+	}
+	return fitting
+}
+
 fn test_function_name_patterns_cover_what_the_stages_build() {
-	patterns := stage_built_name_patterns()
-	assert patterns.len > 50
+	built := stage_built_name_patterns()
+	assert built.len > 50
 	// `'${name}_str'`, `'map_hash_int_${size}'`: names with a part of their own.
-	assert '*_str' in patterns
-	assert 'map_hash_int_*' in patterns
+	assert '*_str' in built
+	assert 'map_hash_int_*' in built
 	// `'builtin.${name}'` only says which module a name belongs to.
-	assert 'builtin.*' !in patterns
+	assert 'builtin.*' !in built
 	assert built_name_is_specific('*_free') && built_name_is_specific('overflow.*_checked')
 	assert !built_name_is_specific('*.*') && !built_name_is_specific('builtin__*')
 	assert !built_name_is_specific('math.bits.*') && !built_name_is_specific('*_*')
+	patterns := stage_built_function_name_patterns()
+	assert patterns.len > 10 && patterns.len < built.len
+	assert '*_str' in patterns && 'map_hash_int_*' in patterns
 	mut missing := []string{}
 	for pattern in patterns {
 		if pattern !in cached_function_name_patterns {
@@ -546,42 +590,60 @@ fn test_function_name_patterns_cover_what_the_stages_build() {
 	// A stage that puts the name of a function together can look for its
 	// declaration, and do something else without a word where there is none. Add
 	// the names to cached_function_name_patterns in cached_declarations.v.
-	assert missing == [], 'names that a stage builds: ${missing}'
+	assert missing == [], 'names of functions that a stage builds: ${missing}'
 }
 
 fn test_name_patterns_fit_the_names_that_they_stand_for() {
-	patterns := v3_name_patterns(['*_str', 'map_hash_int_*', 'new_*_noscan', '*_key_*', 'overflow.*_i8',
-		'*.free', 'sync__*_st', 'exact_name*'])
-	for module_name, name in {
-		'builtin':  'ptr_str'
-		'strconv':  'f64_to_str'
-		'hash':     'map_hash_int_8'
-		'arrays':   'new_array_noscan'
-		'maps':     'drop_owned_key_value'
-		'overflow': 'add_i8'
-		'os':       'free'
-		'sync':     'new_channel_st'
-		'mymod':    'exact_name'
-	} {
-		assert patterns.fit(module_name, name), '${module_name}.${name}'
+	patterns := ['*_str', 'map_hash_int_*', 'new_*_noscan', '*_key_*', 'overflow.*_i8', '*.free',
+		'sync__*_st', 'exact_name*', 'builtin__overflow__*_u8', '__new_*', '*__clone'].map(v3_name_pattern(it))
+	fits := fn [patterns] (module_name string, name string) bool {
+		return patterns.any(it.fits(module_name, name))
 	}
-	for module_name, name in {
-		'builtin':  'str_ptr'
-		'hash':     'map_hash_int'
-		'arrays':   'new_noscan'
-		'maps':     'key_value'
-		'other':    'add_i8'
-		'os':       'freed'
-		'sync':     'channel_st_new'
-		'mymod':    'not_exact_name'
-		'overflow': 'i8'
-	} {
-		assert !patterns.fit(module_name, name), '${module_name}.${name}'
+	for function in [
+		['builtin', 'ptr_str'],
+		['strconv', 'f64_to_str'],
+		['hash', 'map_hash_int_8'],
+		['arrays', 'new_array_noscan'],
+		['maps', 'drop_owned_key_value'],
+		['overflow', 'add_i8'],
+		['os', 'free'],
+		['sync', 'new_channel_st'],
+		['mymod', 'exact_name'],
+		['overflow', 'sub_u8'],
+		['builtin', '__new_array'],
+		['anything', 'clone'],
+	] {
+		assert fits(function[0], function[1]), function.str()
 	}
-	// A pattern of one part must be all of the name.
-	assert v3_name_patterns(['abc*']).fit('m', 'abcdef')
-	assert !v3_name_patterns(['abc*']).fit('m', 'xabc')
-	assert !v3_name_patterns([]string{}).fit('m', 'anything')
+	for function in [
+		['builtin', 'str_ptr'],
+		['hash', 'map_hash_int'],
+		['arrays', 'new_noscan'],
+		['maps', 'key_value'],
+		['other', 'add_i8'],
+		['os', 'freed'],
+		['sync', 'channel_st_new'],
+		['mymod', 'not_exact_name'],
+		['overflow', 'i8'],
+		['builtin', 'sub_u8'],
+		['builtin', 'new_array'],
+		['anything', 'cloned'],
+	] {
+		assert !fits(function[0], function[1]), function.str()
+	}
+	// The module of a pattern is the last part of its name, or any.
+	assert v3_name_pattern('builtin.overflow.add_*').module_name == 'overflow'
+	assert v3_name_pattern('*.len').module_name == ''
+	assert v3_name_pattern('*_str').module_name == ''
+	assert v3_name_pattern('__new_array*').module_name == ''
+	// A pattern of one part with nothing to fill in is the whole name.
+	assert v3_name_pattern('abc').fits('m', 'abc')
+	assert !v3_name_pattern('abc').fits('m', 'abcd')
+	assert v3_name_pattern('abc*').fits('m', 'abcdef')
+	assert !v3_name_pattern('abc*').fits('m', 'xabc')
+	// Parts in a row do not share letters of the name.
+	assert v3_name_pattern('ab*bc').fits('m', 'abbc')
+	assert !v3_name_pattern('ab*bc').fits('m', 'abc')
 }
 
 fn test_functions_that_a_built_name_stands_for_stay() {
@@ -591,7 +653,7 @@ fn test_functions_that_a_built_name_stands_for_stay() {
 	}
 	header := os.join_path(root, 'cachedmod.vh')
 	pruned := prune_unreferenced_cached_functions(mut a, module_lifecycle_function_names,
-		[]string{}, ['un*ed', 'cachedmod.named_by_*', 'other_*'])
+		[]string{}, ['un*ed', 'cachedmod.named_by_*', 'other_*', 'othermod.never_*'])
 	kinds := function_kinds(a, header)
 	assert kinds['unused'] == .fn_decl
 	assert kinds['named_by_a_stage'] == .fn_decl

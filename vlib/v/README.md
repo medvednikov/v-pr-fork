@@ -616,12 +616,14 @@ of any other module of vlib with the name of the module, as `dl.interface_export
 (`cached_module_function_names`, which keeps the function of that module only). A name that a
 stage puts together when it runs is in no literal: the literals that are names with a part to
 fill in, as `map_hash_int_${size}` or `name + '_str'`, are kept as patterns
-(`cached_function_name_patterns`), and a function that one of them fits stays. A test works
-all three lists out from the sources of the stages again. A stage that finds no
-declaration of such a function can do something else without a word. The C generator
-checks the result: when the generated C names a function that was left out, or the C compiler
-reports an error in the program unit, the build starts again with every declaration, and records
-the function in `kept_cached_functions` of the module cache, so that later builds keep it. TinyCC
+(`cached_function_name_patterns`), and a function that one of them fits stays. Only the
+patterns that fit a function of vlib are in that list; the others are names of temporaries,
+types and keywords. A test works all three lists out from the sources of the stages again. A
+stage that finds no declaration of such a function can do something else without a word. The C
+generator checks the result: when the generated C names a function that was left out, or the C
+compiler reports an error in the program unit, the build starts again with every declaration,
+and records the function in `kept_cached_functions` of the module cache, so that later builds
+keep it. TinyCC
 and the system compiler get `-Werror=implicit-function-declaration` for such a unit. A build
 whose checker or transformer reports errors starts again as well, before it prints them: what an
 error says, the names that it suggests for one, can depend on the declarations that are known.
