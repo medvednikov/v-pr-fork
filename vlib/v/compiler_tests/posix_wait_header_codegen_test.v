@@ -450,9 +450,9 @@ fn main() {
 	assert !c_code.contains('typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;'), c_code
 }
 
-fn test_winapi_extern_prototypes_use_calling_convention() {
+fn test_winapi_declarations_come_from_target_headers() {
 	v3_bin := wait_header_build_v3()
-	c_code := wait_header_gen_c(v3_bin, 'winapi_calling_convention', 'module main
+	c_code := wait_header_gen_windows_c(v3_bin, 'winapi_calling_convention', 'module main
 
 fn C.GetStdHandle(u32) voidptr
 fn C.CreateFileW(&u16, u32, u32, voidptr, u32, u32, voidptr) voidptr
@@ -463,17 +463,16 @@ fn main() {
 	_ = C.CreateFileW(path, 0, 0, voidptr(0), 0, 0, voidptr(0))
 }
 ')
-	assert c_code.contains('#ifndef WINAPI'), c_code
-	assert c_code.contains('#define WINAPI __stdcall'), c_code
-	assert c_code.contains('void* WINAPI GetStdHandle(u32);'), c_code
-	assert c_code.contains('void* WINAPI CreateFileW(u16*, u32, u32, void*, u32, u32, void*);'), c_code
-	assert !c_code.contains('void* GetStdHandle(u32);'), c_code
-	assert !c_code.contains('void* CreateFileW(u16*, u32, u32, void*, u32, u32, void*);'), c_code
+	assert c_code.contains('#include <windows.h>'), c_code
+	assert c_code.contains('GetStdHandle('), c_code
+	assert c_code.contains('CreateFileW(path,'), c_code
+	assert !c_code.contains('void* WINAPI GetStdHandle(u32);'), c_code
+	assert !c_code.contains('void* WINAPI CreateFileW(u16*, u32, u32, void*, u32, u32, void*);'), c_code
 }
 
 fn test_unsuffixed_winapi_decls_use_wide_exports() {
 	v3_bin := wait_header_build_v3()
-	c_code := wait_header_gen_c(v3_bin, 'winapi_unsuffixed_wide_exports', 'module main
+	c_code := wait_header_gen_windows_c(v3_bin, 'winapi_unsuffixed_wide_exports', 'module main
 
 fn C.GetModuleFileName(voidptr, &u16, u32) u32
 fn C.CreateFile(&u16, u32, u32, voidptr, u32, u32, voidptr) voidptr
@@ -488,14 +487,15 @@ fn main() {
 	_ = voidptr(&C.DefWindowProc)
 }
 ')
-	assert c_code.contains('u32 WINAPI GetModuleFileNameW(void*, u16*, u32);'), c_code
-	assert c_code.contains('void* WINAPI CreateFileW(u16*, u32, u32, void*, u32, u32, void*);'), c_code
-	assert c_code.contains('void* WINAPI LoadLibraryW(u16*);'), c_code
-	assert c_code.contains('ptrdiff_t WINAPI DefWindowProcW(void*, u32, size_t, ptrdiff_t);'), c_code
+	assert !c_code.contains('u32 WINAPI GetModuleFileNameW(void*, u16*, u32);'), c_code
+	assert !c_code.contains('void* WINAPI CreateFileW(u16*, u32, u32, void*, u32, u32, void*);'), c_code
+	assert !c_code.contains('void* WINAPI LoadLibraryW(u16*);'), c_code
+	assert !c_code.contains('ptrdiff_t WINAPI DefWindowProcW(void*, u32, size_t, ptrdiff_t);'), c_code
+	assert c_code.contains('#include <windows.h>'), c_code
 	assert c_code.contains('GetModuleFileNameW('), c_code
 	assert c_code.contains('CreateFileW('), c_code
 	assert c_code.contains('LoadLibraryW('), c_code
-	assert c_code.contains('&DefWindowProcW'), c_code
+	assert c_code.contains('(void*)(DefWindowProcW)'), c_code
 	assert !c_code.contains('GetModuleFileName('), c_code
 	assert !c_code.contains('CreateFile('), c_code
 	assert !c_code.contains('LoadLibrary('), c_code
