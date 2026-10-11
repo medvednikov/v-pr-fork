@@ -42,6 +42,7 @@ fn test_shipped_zstd_temporary_inline_protocol_is_exact_and_balanced() ! {
 		source.replace('#    undef inline\n', '#    undef inline_other\n'),
 		source.replace('#    undef inline\n', ''),
 		source.replace('#    include <arm_neon.h>', '#    include <other.h>'),
+		source.replace('/**** start inlining ../zstd.h ****/', '/* owner marker removed */'),
 		source + '\n#define inline extern inline\n',
 		source + '\n#define MBEDTLS_CONFIG_FILE "custom.h"\n',
 	] {
