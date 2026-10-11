@@ -1,6 +1,7 @@
 c_and_v_type_interoperability.md
 c_compiler_selection.md
 codelite.md
+compile_error_messages.md
 compiler-fallback.md
 comptime-reflection-sources.md
 docs.md
