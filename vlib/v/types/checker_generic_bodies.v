@@ -37,6 +37,10 @@ fn (mut tc TypeChecker) check_generic_fn_body(node flat.Node, fn_idx int, params
 			return
 		}
 	}
+	// Fixture mode defers constrained-body diagnostics, but module privacy also applies there.
+	if !tc.check_generic_bodies {
+		return
+	}
 	// With its type parameters open, the checker says of a statement that does
 	// not depend on them what it says in every instance.
 	open := tc.check_generic_fn_body_as(node, fn_idx, map[string]string{})

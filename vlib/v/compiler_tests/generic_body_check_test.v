@@ -38,6 +38,16 @@ fn check_form(name string, source string) []string {
 		&& (it.contains(': error: ') || it.contains(': warning: ')))
 }
 
+// check_fixture_form keeps fixture-mode deferral of constrained bodies while checking visibility.
+fn check_fixture_form(name string, source string) []string {
+	dir := os.join_path(work_dir, name)
+	os.mkdir_all(dir) or { panic(err) }
+	os.write_file(os.join_path(dir, 'main.v'), source) or { panic(err) }
+	res := cmdexec.run_in(@VEXE, ['-new-compiler', '-checker-fixture', '-check', '-nocolor', '.'], dir)
+	return res.output.split_into_lines().filter(it.starts_with('main.v:')
+		&& (it.contains(': error: ') || it.contains(': warning: ')))
+}
+
 // build builds `source` as the main.v of a directory of its own and returns the
 // lines of its errors. Its method form has to report the same.
 fn build(name string, source string) []string {
@@ -634,8 +644,9 @@ fn main() {
 }
 '
 	for name, run in {
-		'private':       check_form
-		'private_build': build_form
+		'private':         check_form
+		'private_build':   build_form
+		'private_fixture': check_fixture_form
 	} {
 		path := os.join_path(work_dir, name, 'privlib')
 		os.mkdir_all(path) or { panic(err) }
