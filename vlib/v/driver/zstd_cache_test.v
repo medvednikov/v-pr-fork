@@ -42,6 +42,8 @@ fn test_native_preprocessed_type_boundaries_and_config_overrides() {
 fn test_native_config_override_logical_directives() {
 	assert v3_native_text_overrides_mbedtls('# define\tMBEDTLS_CONFIG_FILE "custom.h"')
 	assert v3_native_text_overrides_mbedtls('#define MBEDTLS_\\\nCONFIG_FILE "custom.h"')
+	assert v3_native_text_overrides_mbedtls('#define MBED\\\nTLS_CONFIG_FILE "custom.h"')
+	assert v3_native_text_overrides_mbedtls('#define P\\\r\nSA_CONFIG_FILE "custom.h"')
 	assert v3_native_text_overrides_mbedtls('#undef PSA_WANT_ALG_SHA_256')
 	assert v3_native_text_overrides_mbedtls('/* context */ #define MBEDTLS_CONFIG_FILE "custom.h"')
 	assert !v3_native_text_overrides_mbedtls('#define OTHER_CONFIG "custom.h"')

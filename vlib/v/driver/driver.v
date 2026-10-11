@@ -4587,7 +4587,8 @@ fn v3_split_native_declaration_lines(source string) string {
 // A sibling input can hide directives behind comments or macro continuations.
 // Conservatively keep any reference to configuration names on the old fallback.
 fn v3_native_text_overrides_mbedtls(source string) bool {
-	return source.contains('MBEDTLS_') || source.contains('PSA_')
+	spliced := source.replace('\\\n', '').replace('\\\r\n', '')
+	return spliced.contains('MBEDTLS_') || spliced.contains('PSA_')
 }
 
 fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, a &flat.FlatAst, prefs &pref.Preferences, flags []string, compiler string, compiler_explicit bool, cross_sysroot string) V3NativeInputExpansion {
