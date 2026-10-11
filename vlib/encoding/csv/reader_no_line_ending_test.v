@@ -2,6 +2,7 @@ import encoding.csv
 
 fn test_reader_single_record_without_line_ending() {
 	cases := [
+		['a,b,c', 'a', 'b', 'c'],
 		['a,b', 'a', 'b'],
 		['"a","b"', 'a', 'b'],
 		[',', '', ''],
@@ -16,6 +17,21 @@ fn test_reader_single_record_without_line_ending() {
 			continue
 		}
 		assert false, 'read an extra record from ${data[0]}'
+	}
+}
+
+fn test_single_record_is_independent_of_line_ending() {
+	for ending in ['', '\n', '\r', '\r\n'] {
+		for data in ['x', 'a,b,c', '"a","b",c', 'a,b,'] {
+			mut reader := csv.new_reader(data + ending)
+			mut unterminated := csv.new_reader(data)
+			assert reader.read()! == unterminated.read()!
+			reader.read() or {
+				assert err.msg() == 'encoding.csv: end of file'
+				continue
+			}
+			assert false, 'read an extra record for ${data} with ${ending.bytes()}'
+		}
 	}
 }
 
