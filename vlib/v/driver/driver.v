@@ -4591,8 +4591,76 @@ fn v3_native_text_overrides_mbedtls(source string) bool {
 	return spliced.contains('MBEDTLS_') || spliced.contains('PSA_')
 }
 
+// Inspect logical C directives without changing the literal expansion cache.
+fn v3_native_directive_text(source string) string {
+	spliced := source.replace('\\\n', '').replace('\\\r\n', '')
+	mut text := strings.new_builder(spliced.len)
+	mut quote := u8(0)
+	mut escaped := false
+	mut block_comment := false
+	mut line_comment := false
+	mut i := 0
+	for i < spliced.len {
+		ch := spliced[i]
+		if block_comment {
+			if ch == `*` && i + 1 < spliced.len && spliced[i + 1] == `/` {
+				block_comment = false
+				i += 2
+				continue
+			}
+			if ch == `\n` { text.write_u8(ch) }
+		} else if line_comment {
+			if ch == `\n` {
+				line_comment = false
+				text.write_u8(ch)
+			}
+		} else if quote != 0 {
+			text.write_u8(ch)
+			if escaped {
+				escaped = false
+			} else if ch == `\\` {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+		} else if ch == `/` && i + 1 < spliced.len && spliced[i + 1] in [`*`, `/`] {
+			block_comment = spliced[i + 1] == `*`
+			line_comment = !block_comment
+			text.write_u8(` `)
+			i += 2
+			continue
+		} else {
+			text.write_u8(ch)
+			if ch in [`"`, `'`] { quote = ch }
+		}
+		i++
+	}
+	return text.str()
+}
+
+fn v3_native_file_has_default_mbedtls_context(path string, include_dirs []string, vroot string, mut visited map[string]bool) bool {
+	real_path := os.real_path(path)
+	if visited[real_path] { return true }
+	visited[real_path] = true
+	source := os.read_file(real_path) or { return false }
+	if v3_native_text_overrides_mbedtls(source) { return false }
+	for line in v3_native_directive_text(source).split_into_lines() {
+		if include_path := v3_parallel_local_include_path(line, os.dir(real_path), include_dirs) {
+			if !cgen.native_path_is_shipped(include_path, vroot) { return false }
+			if !v3_native_file_has_default_mbedtls_context(include_path, include_dirs, vroot, mut visited) {
+				return false
+			}
+		} else if argument := v3_include_directive_argument(line) {
+			if !argument.starts_with('<') { return false }
+		}
+	}
+	return true
+}
+
 fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, a &flat.FlatAst, prefs &pref.Preferences, flags []string, compiler string, compiler_explicit bool, cross_sysroot string) V3NativeInputExpansion {
-	if !v3_mbedtls_default_header_context(a, flags) { return V3NativeInputExpansion{} }
+	if prefs.is_prod || prefs.is_shared || !v3_mbedtls_default_header_context(a, flags) {
+		return V3NativeInputExpansion{}
+	}
 	mut headers := map[string]bool{}
 	for path in native_inputs.native_paths.keys() {
 		if v3_is_bundled_mbedtls_header(path, prefs.vroot) { headers[path] = true }
@@ -4600,11 +4668,8 @@ fn v3_preprocess_bundled_mbedtls_headers(native_inputs &cgen.CacheNativeInputs, 
 	if headers.len == 0 { return V3NativeInputExpansion{} }
 	for path in native_inputs.native_paths.keys() {
 		if v3_is_bundled_mbedtls_header(path, prefs.vroot) { continue }
-		mut active := map[string]bool{}
-		mut expanded_paths := map[string]bool{}
-		text, complete := v3_expand_shipped_native_file(path, native_inputs.include_dirs,
-			prefs.vroot, true, mut active, mut expanded_paths)
-		if !complete || v3_native_text_overrides_mbedtls(text) {
+		mut visited := map[string]bool{}
+		if !v3_native_file_has_default_mbedtls_context(path, native_inputs.include_dirs, prefs.vroot, mut visited) {
 			return V3NativeInputExpansion{}
 		}
 	}

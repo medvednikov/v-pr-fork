@@ -62,3 +62,12 @@ fn test_transitive_native_configuration_override_is_not_default() {
 	assert expanded.len == 2
 	assert v3_native_text_overrides_mbedtls(source)
 }
+
+fn test_logical_nested_native_configuration_override_is_not_default() {
+	for name in ['outer.h', 'comment_outer.h', 'spliced_outer.h'] {
+		path := os.join_path(os.dir(@FILE), 'testdata', 'native_config', name)
+		mut visited := map[string]bool{}
+		assert !v3_native_file_has_default_mbedtls_context(path, [], @VEXEROOT, mut visited)
+		assert visited.len == 2
+	}
+}

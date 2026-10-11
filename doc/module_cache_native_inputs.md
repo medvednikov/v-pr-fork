@@ -8,6 +8,7 @@ native source remain cache inputs and invalidate affected entries. Bundled mbedT
 headers are checked with the selected C preprocessor and their active dependencies
 are tracked. Custom mbedTLS/PSA configuration directives and forced headers keep
 the conservative fallback when their original context cannot be reconstructed.
+Production and shared builds retain this fallback for bundled mbedTLS headers.
 
 Set `V3_CACHE_TRACE=1` to inspect cache decisions, and use `-show-timings` to see
 `monomorphize (cached)` on an unchanged build. External native inputs without a safe
