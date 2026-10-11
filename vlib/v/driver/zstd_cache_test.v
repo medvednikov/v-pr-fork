@@ -34,6 +34,22 @@ fn test_brotli_native_wrappers_are_stateless_and_replicable() ! {
 	assert modulecache.c_source_is_replicable(source)
 }
 
+fn test_shipped_zstd_temporary_inline_protocol_is_exact_and_balanced() ! {
+	path := os.real_path(os.join_path(@VEXEROOT, 'thirdparty', 'zstd', 'zstd.c'))
+	source := os.read_file(path)!
+	assert !v3_native_text_overrides_mbedtls(v3_mbedtls_context_guard_source(path, source, @VEXEROOT))
+	for changed in [
+		source.replace('#    undef inline\n', '#    undef inline_other\n'),
+		source.replace('#    undef inline\n', ''),
+		source.replace('#    include <arm_neon.h>', '#    include <other.h>'),
+		source + '\n#define inline extern inline\n',
+		source + '\n#define MBEDTLS_CONFIG_FILE "custom.h"\n',
+	] {
+		assert v3_native_text_overrides_mbedtls(v3_mbedtls_context_guard_source(path, changed, @VEXEROOT))
+	}
+	assert v3_native_text_overrides_mbedtls(v3_mbedtls_context_guard_source(os.join_path(@VEXEROOT, 'other.c'), source, @VEXEROOT))
+}
+
 fn test_native_preprocessed_type_boundaries_and_config_overrides() {
 	source := 'enum { QOS_NORMAL = 1 }; typedef unsigned int qos_class_t;'
 	assert !modulecache.c_source_is_replicable(source)
