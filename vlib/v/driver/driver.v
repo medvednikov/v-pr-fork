@@ -4522,6 +4522,10 @@ fn v3_mbedtls_default_header_context(a &flat.FlatAst, flags []string) bool {
 		}
 	}
 	for node in a.nodes {
+		// A V C-binding can add a non-inline prototype outside the header probe.
+		if node.kind == .c_fn_decl && node.value.all_after_last('.') == '__sputc' {
+			return false
+		}
 		if node.kind == .directive && node.value in ['define', 'undef']
 			&& (node.typ.contains('MBEDTLS_') || node.typ.contains('PSA_')) {
 			return false

@@ -74,6 +74,11 @@ fn test_preprocessed_sdk_inline_annotation_preserves_replication_guards() {
 	// Literal native closures still use the original conservative classifier.
 	alias := '#define GNU_INLINE gnu_inline\ninline __attribute__((GNU_INLINE)) int helper(int value) { return value + 1; }'
 	assert !modulecache.c_source_is_replicable(alias)
+	for name in ['__sputc', 'C.__sputc'] {
+		mut ast := flat.FlatAst.new()
+		ast.add_node(flat.Node{ kind: .c_fn_decl, value: name })
+		assert !v3_mbedtls_default_header_context(&ast, [])
+	}
 }
 
 fn test_transitive_native_configuration_override_is_not_default() {
