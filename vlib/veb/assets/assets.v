@@ -271,6 +271,7 @@ pub fn (mut am AssetManager) combine(asset_type AssetType) !string {
 }
 
 // TODO: implement proper minification
+// minify_css trims each line while preserving whitespace between non-empty lines.
 @[manualfree]
 pub fn minify_css(css string) string {
 	mut lines := css.split('\n')
@@ -283,6 +284,9 @@ pub fn minify_css(css string) string {
 	for line in lines {
 		trimmed := line.trim_space()
 		if trimmed != '' {
+			if sb.len > 0 {
+				sb.write_u8(` `)
+			}
 			sb.write_string(trimmed)
 		}
 	}
@@ -291,6 +295,7 @@ pub fn minify_css(css string) string {
 }
 
 // TODO: implement proper minification
+// minify_js joins non-empty trimmed lines without trailing whitespace.
 @[manualfree]
 pub fn minify_js(js string) string {
 	mut lines := js.split('\n')
@@ -303,8 +308,10 @@ pub fn minify_js(js string) string {
 	for line in lines {
 		trimmed := line.trim_space()
 		if trimmed != '' {
+			if sb.len > 0 {
+				sb.write_u8(` `)
+			}
 			sb.write_string(trimmed)
-			sb.write_u8(` `)
 		}
 	}
 

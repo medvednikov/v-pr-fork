@@ -175,3 +175,7 @@ app.am.handle_assets_at('assets', 'static')!
 
 Now if you want to include `main.css` you would write
 ``@{app.am.include('static/css/main.css')}`
+
+The lightweight minifiers trim lines and join non-empty lines with a space. CSS preserves
+whitespace between selectors split across lines, and JavaScript has no trailing space.
+These helpers do not parse CSS or JavaScript syntax.

@@ -35,3 +35,6 @@ fn main() {
 	assert decompressed == uncompressed.bytes()
 }
 ```
+
+A callback returning zero aborts decompression immediately. The returned count covers delivered
+bytes; unread compressed data and container checksums are not validated after an abort.
