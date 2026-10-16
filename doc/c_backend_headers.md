@@ -9,8 +9,10 @@ NetBSD, Solaris, Haiku, QNX, Serenity, Vinix and Emscripten retain the SDK pream
 compiler and runtime builds. Their symbol versions, storage or constants require native
 declarations that the standalone preamble does not yet describe completely. Literal
 hello output still avoids those headers on the other hosted targets. Vinix retains the complete
-runtime even for literal output. Native execution must be validated on each
-platform; generating C for a target alone does not verify its runtime ABI.
+runtime even for literal output. Windows builds with TinyCC or MSVC also retain the SDK preamble,
+because their atomics header, `thirdparty/stdatomic/win/atomic.h`, includes `<windows.h>`.
+Native execution must be validated on each platform; generating C for a target alone does not
+verify its runtime ABI.
 The compiler's string literals can contain the text of includes for other generated programs.
 The C backend emits libc prototypes from bodyless V declarations such as
 `fn C.strlen(const_s &char) usize`. Runtime bindings are marked used so cached modules

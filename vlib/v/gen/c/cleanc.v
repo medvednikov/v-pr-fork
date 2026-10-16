@@ -19413,6 +19413,12 @@ fn (g &FlatGen) c_directives_use_system_libc() bool {
 	if g.target.os in ['netbsd', 'solaris', 'haiku', 'qnx', 'serenity', 'vinix', 'wasm32_emscripten'] {
 		return true
 	}
+	// TinyCC and MSVC take their atomics from thirdparty/stdatomic/win/atomic.h, which
+	// includes <windows.h>. Its types and records conflict with the standalone Windows
+	// declarations, so these builds keep the SDK headers.
+	if g.windows_tcc_target() || (g.target.os == 'windows' && g.ccompiler == 'msvc') {
+		return true
+	}
 	for directive in g.preinclude_directives {
 		for line in directive.split_into_lines() {
 			clean := trimmed_space(line)
@@ -22190,11 +22196,16 @@ fn (mut g FlatGen) tinyc_atomic_libcall_decls() {
 	g.writeln('#endif')
 }
 
+// windows_tcc_target reports whether the generated C is built by TinyCC for Windows.
+fn (g &FlatGen) windows_tcc_target() bool {
+	return g.target.os == 'windows'
+		&& (g.ccompiler == 'tinyc' || g.ccompiler.to_lower().contains('tcc'))
+}
+
 fn (mut g FlatGen) atomic_builtin_compat_decls() {
 	// Windows TCC takes its atomics from V's WinAPI compatibility header, which
 	// defines these helpers as function-like macros of its own.
-	windows_tcc := g.target.os == 'windows'
-		&& (g.ccompiler == 'tinyc' || g.ccompiler.to_lower().contains('tcc'))
+	windows_tcc := g.windows_tcc_target()
 	header := os.join_path(g.compiler_vroot, 'thirdparty', 'stdatomic', 'win', 'atomic.h').replace('\\', '/')
 	if windows_tcc && !g.output_cross_c {
 		g.writeln(g.c_local_header_directive(header))

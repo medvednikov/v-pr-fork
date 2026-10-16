@@ -89,6 +89,33 @@ fn test_unverified_libc_abis_keep_native_sdk_declarations() {
 	}
 }
 
+fn test_windows_tcc_and_msvc_keep_the_sdk_headers_of_their_atomics() {
+	mut a := flat.FlatAst{}
+	mut g := FlatGen.new()
+	g.a = &a
+	g.compiler_vroot = '/vroot'
+	g.set_target(pref.target_from('windows', 'amd64') or { panic(err) })
+	source := '/vroot/vlib/builtin/builtin_windows.c.v'
+	g.core_header_directives << DeferredCoreHeader{
+		source_file: source
+		directive:   CDirective{ module: 'builtin', text: '#include <io.h>' }
+	}
+	for cc in ['gcc', 'clang'] {
+		g.set_ccompiler(cc)
+		assert !g.c_directives_use_system_libc(), cc
+	}
+	// thirdparty/stdatomic/win/atomic.h includes <windows.h>, which redefines the
+	// standalone DWORD and WinAPI records.
+	for cc in ['tinyc', 'tcc', 'C:\\v\\thirdparty\\tcc\\tcc.exe', 'msvc'] {
+		g.set_ccompiler(cc)
+		assert g.c_directives_use_system_libc(), cc
+	}
+	g.restore_core_header_directives_for_system_libc()
+	assert g.c_directives.len == 1
+	assert g.c_directives[0].text == '#include <io.h>'
+	assert g.files_with_c_includes[source]
+}
+
 fn test_compiler_bootstrap_keeps_core_declarations_in_v() {
 	mut ast := flat.FlatAst.new()
 	mut tc := types.TypeChecker.new(&ast)
