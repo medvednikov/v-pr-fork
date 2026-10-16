@@ -129,6 +129,16 @@ class BootstrapConfigurationTests(unittest.TestCase):
                 )
                 self.assertIn("exit /b !stage_error!", body)
 
+    def test_tcc_stage_links_the_math_library_that_vlib_selects(self):
+        # V does not link the stage, so the Windows TCC #flag of vlib/math is repeated.
+        math_flags = (ROOT / "vlib/math/math.c.v").read_text(encoding="utf-8")
+        self.assertIn("#flag @VEXEROOT/thirdparty/tcc/lib/openlibm.o\n", math_flags)
+        link = next(
+            line for line in routine("build_stage_with_tcc").splitlines()
+            if line.startswith('"!tcc_exe!" ')
+        )
+        self.assertIn('"%V_STAGE_C%" %V_STAGE_NATIVE% "%tcc_dir%\\lib\\openlibm.o" ', link)
+
     def test_all_routes_use_the_fresh_stage_to_build_the_installed_compiler(self):
         for label, stage in (
             ("build_fresh_v_with_tcc", "tcc"),
