@@ -52,6 +52,32 @@ class BootstrapConfigurationTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertIn("%VC_BOOTSTRAP_DEFINE%", commands[0])
 
+    def test_all_bootstraps_link_the_native_helpers_of_older_snapshots(self):
+        # Snapshots generated before #30606 only declare these helpers. Newer ones
+        # embed the headers, whose default scope must stay static so that the
+        # external definitions linked here do not collide with the embedded copies.
+        helpers = re.search(r"(?m)^set V_BOOTSTRAP_NATIVE=(.+)$", SOURCE)
+        self.assertIsNotNone(helpers)
+        for source, header, scope in (
+            ("vlib/time/ticks_windows.c", "vlib/time/ticks_windows.h",
+             "#define V_TIME_TICKS_SCOPE static inline"),
+            ("vlib/v/winthread_helper_windows.c", "vlib/v/winthread_helper.h",
+             "#define V3_WINTHREAD_SCOPE static inline"),
+            ("cmd/v/toolcache_windows_helpers.c", "cmd/v/toolcache_windows_helpers.h",
+             "#define V_TOOLCACHE_WINDOWS_SCOPE static"),
+        ):
+            with self.subTest(source=source):
+                self.assertIn('"%~dp0' + source.replace("/", "\\") + '"', helpers.group(1))
+                self.assertTrue((ROOT / source).is_file())
+                self.assertIn(scope + "\n", (ROOT / header).read_text(encoding="utf-8"))
+        for compiler in ("tcc", "msvc", "clang", "gcc"):
+            with self.subTest(compiler=compiler):
+                command = next(
+                    line for line in routine("build_bootstrap_with_" + compiler).splitlines()
+                    if '"%V_C_FILE%"' in line and not line.startswith("echo ")
+                )
+                self.assertIn('"%V_C_FILE%" %V_BOOTSTRAP_NATIVE% ', command)
+
     def test_msvc_fallbacks_build_the_next_stage(self):
         attempts = re.findall(
             r"call :build_msvc_stage (tcc|msvc|clang|gcc)\b", routine("msvc_strap")
