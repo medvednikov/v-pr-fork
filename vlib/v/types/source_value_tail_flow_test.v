@@ -137,6 +137,7 @@ fn test_generic_call_rejects_source_backed_option_and_result_type_names() {
 			children_count: 1
 		})
 		mut tc := TypeChecker.new(&a)
+		tc.diagnose_unknown_calls = true
 		tc.reset_node_caches(a.nodes.len)
 		tc.fn_ret_types['known'] = Type(int_)
 		tc.check_call(call_id, a.nodes[int(call_id)])
@@ -200,13 +201,13 @@ fn test_generic_struct_init_inference_reads_source_operand_and_legacy_fallback()
 	tc.reset_node_caches(a.nodes.len)
 	tc.cur_module = 'main'
 	tc.top_level_idx = [i32(module_id), i32(declaration)]
-	tc.structs['main.Box'] = [StructField{ name: 'value', typ: unknown_type('T') }]
-	tc.struct_generic_params['main.Box'] = ['T']
+	tc.structs['Box'] = [StructField{ name: 'value', typ: unknown_type('T') }]
+	tc.struct_generic_params['Box'] = ['T']
 	for node in [legacy, a.nodes[int(canonicalized)], a.nodes[int(indexed)]] {
 		inferred := tc.infer_generic_struct_init_type(node) or {
 			panic('failed to infer Box from original struct operand')
 		}
-		assert inferred.source_type_id() == flat.source_type_id('main.Box[string]')
+		assert inferred.source_type_id() == flat.source_type_id('Box[string]')
 		assert node.typ == checked_id
 	}
 }
