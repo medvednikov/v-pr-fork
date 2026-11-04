@@ -10728,6 +10728,8 @@ build as if `-gc none` was passed. For x64, `-prod` enables SSA optimization, sc
 allocation, and optimized C helpers. Very large x64 modules may skip the global SSA pass to
 bound compiler memory. The ARM64 backend retains its existing optimization behavior.
 ARM64 executable linking is silent by default; use `-stats` to display compiler stage timings.
+ARM64 builds reject native source files included with `#include`, `#insert`, `#preinclude`, or
+`#postinclude`, because its linker cannot link those sources yet. Use the C backend for them.
 The x64 backend is experimental. Calls without a native implementation fail compilation
 or linking rather than producing placeholder implementations.
 It requires a Linux AMD64 host. Passing or returning C structs and arrays by value is
