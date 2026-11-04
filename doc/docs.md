@@ -10730,6 +10730,8 @@ bound compiler memory. The ARM64 backend retains its existing optimization behav
 ARM64 executable linking is silent by default; use `-stats` to display compiler stage timings.
 ARM64 builds reject native source files included with `#include`, `#insert`, `#preinclude`, or
 `#postinclude`, because its linker cannot link those sources yet. Use the C backend for them.
+ARM64 resolves a fixed set of platform C constants. Other C constants produce an error;
+use the C backend when a header defines a constant the native backend does not support.
 The x64 backend is experimental. Calls without a native implementation fail compilation
 or linking rather than producing placeholder implementations.
 It requires a Linux AMD64 host. Passing or returning C structs and arrays by value is
