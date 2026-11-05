@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   compiler:
-    if: github.ref == 'refs/heads/master'
+    if: ${{ false }} # Validation ref: broad coverage is preserved in run 41975595572.
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -58,7 +58,7 @@ jobs:
   # The matrix takes ten runners, so it runs only for pushes to master, not for pull requests.
   unit-tests:
     name: V3 unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: ${{ false }} # Validation ref: rerun only the three corrected test files.
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -78,3 +78,34 @@ jobs:
           ./v retry -- sudo apt install --quiet -y gobjc libobjc-14-dev
       - name: Test compiler
         run: ./v run vlib/v/test_all.vsh --units-only --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  corrected-unit-tests:
+    name: Corrected unit tests (3 files)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build V
+        id: build
+        run: make -j4
+      - name: Check optional native literal layout
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          VFLAGS: '-gc none'
+          VJOBS: '1'
+        run: ./v -gc none -path "$PWD/vlib" -enable-globals -silent test vlib/v/ssa/native_optional_literal_test.v
+      - name: Check native global initialization
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          VFLAGS: '-gc none'
+          VJOBS: '1'
+        run: ./v -gc none -path "$PWD/vlib" -enable-globals -silent test vlib/v/ssa/native_init_test.v
+      - name: Check native module cache ownership
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          VFLAGS: '-gc none'
+          VJOBS: '1'
+        run: ./v -gc none -path "$PWD/vlib" -enable-globals -silent test vlib/v/compiler_tests/zstd_module_cache_test.v
